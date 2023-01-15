@@ -181,7 +181,7 @@ class NamuMark {
         $this->htr->fn = $this->fn;
         $this->htr->fnset = $this->fnset;
         unset($wtext);
-        return ($this->wikitextbox?'':'<div id="content-s-0" class="wiki-heading-content">').$this->htr->render($token);
+        return ($this->wikitextbox?$this->htr->render($token):'<div id="content-s-0" class="wiki-heading-content">'.$this->htr->render($token).'</div>');
     }
 
     /**
