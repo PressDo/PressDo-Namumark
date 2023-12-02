@@ -5,7 +5,6 @@
  */
 class HTMLRenderer
 {
-    public string $html = '';
     public $title, $toc = [], $fn_overview = [], $fn = [], $fnset = [];
 
     public function __construct()
@@ -19,7 +18,11 @@ class HTMLRenderer
                 
                 case 'void':
                     break;
+                case 'math':
+                    $result .= '<span class="katex">'.$t['text'].'</span>';
+                    break;
                 case 'syntax':
+                    $result .= '<pre><code class="syntax" data-language="'.$t['language'].'">'.$t['text'].'</code></pre>';
                     break;
                 case 'wikitext':
                     $result .= '<div '.$t['attr'].'>'.$t['text'].'</div>';
@@ -63,7 +66,7 @@ class HTMLRenderer
                 case 'heading':
                     $result .= '</div>
                             <h'.$t['level'].' class="wiki-heading" '.$t['folded'].'>'
-                            .  '<a id="s-'.$t['section'].'" href="#_toc">'.$t['section'].'.</a><span id="'.strip_tags($t['id']).'">'.$t['text'].'</span>'
+                            .  '<a id="s-'.$t['section'].'" href="#toc">'.$t['section'].'.</a><span id="'.strip_tags($t['id']).'">'.$t['text'].'</span>'
                             .  '<span class="wiki-edit-section"><a href="/edit/'.$this->title.'?section='.$t['section'].'" rel="nofollow">[편집]</a></span>
                             </span>
                         </h'.$t['level'].'><div id="content-s-'.$t['section'].'" class="wiki-heading-content" fold="'.$t['folded'].'">';
@@ -113,7 +116,7 @@ class HTMLRenderer
                         else
                             $classStr = '';
     
-                        $result .= '<a class="'.$classStr.'" href="'.$t['href'].'">'.$t['text'].'</a>';
+                        $result .= '<a class="'.$classStr.'" href="'.$t['href'].'" title="'.$t['target'].'">'.$t['text'].'</a>';
                     }
                     break;
             }
@@ -151,9 +154,26 @@ class HTMLRenderer
         $tdAttrStr = $trInnerStr = $tdAttrStr = $trAttrStr = $tableInnerStr = $tableAttrStr = '';
         $tableAttr = $token['style'];
 
+        if(!empty($token['colstyle'])){
+            foreach($token['colstyle'] as $cci => $cs){
+                foreach($cs as $ccr => $ccs){
+                    $rcnt = count($token['rows']);
+                    for($j=$ccr; $j<$rcnt; $j++){
+                        if(isset($token['rows'][$j]['cols'][$cci])){
+                            if(!isset($token['rows'][$j]['cols'][$cci]['style']))
+                                $token['rows'][$j]['cols'][$cci]['style'] = $ccs;
+                            else
+                                $token['rows'][$j]['cols'][$cci]['style'] = array_merge($ccs, $token['rows'][$j]['cols'][$cci]['style']);
+                        }
+                    }
+                }
+            }
+        }
+
         foreach ($token['rows'] as $r){
             if(!is_array($r))
                 return false;
+
             if(empty($r)){
                 $tableInnerStr .= '<tr></tr>';
                 continue;
