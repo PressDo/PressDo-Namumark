@@ -57,7 +57,7 @@ class NamuMark {
      * ----
      * 0일 경우 이동함 (기본값), 1일 경우 이동하지 않음
      */
-    public int $noredirect = 0;
+    public int|null $noredirect = 0;
 
     /**
      * 토론문법 여부

@@ -10,6 +10,7 @@ function loadMarkUp($content, array $options){
     $wEngine->db = $options['db'];
     $wEngine->ns = $options['namespace'];
 
+    $content = str_replace("\r\n", "\n", $content);
     // toHtml을 호출하면 HTML 페이지가 생성됩니다.
     if($options['thread'])
         return $wEngine->toHtml($content);
