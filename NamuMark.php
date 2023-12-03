@@ -75,6 +75,11 @@ class NamuMark {
      * 유효하지 않은 pagecount() 인수에 대해 기본값으로 표출할 전체 페이지 수
      */
     public $totalPageCount = 0;
+
+    /**
+     * Database 객체. false인 경우 DB 기능을 사용하지 않음.
+     */
+    public bool|PDO $db;
     
     public $intable, $category = [], $firstlinebreak = false, $fromblockquote = false;
     private $WikiPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
@@ -240,10 +245,10 @@ class NamuMark {
         // 리다이렉트 문법
         if(str_starts_with($text, '#') && preg_match('/^#(redirect|넘겨주기) (.+)$/im', $text, $target) && $this->inThread !== false) {
             $rd = 1;
-            $html = $this->linkProcessor($text, '[[', $rd);
-            array_push($this->links, ['target' => $rd['target'], 'type'=>'redirect']); // backlink
-            if(!in_array('not-exist', $rd['class']) && $this->noredirect == 0)
-                header('Location: /w/'.$target[1]); // redirect only valid link
+            $html = $this->linkProcessor($text, $rd);
+            array_push($this->links, ['target' => $target[2], 'type'=>'redirect']); // backlink
+            if($this->noredirect == 0)
+                header('Location: /w/'.$target[2]); // redirect only valid link
             $result = array_merge($result, $html);
         }
 
@@ -557,9 +562,6 @@ class NamuMark {
                                 //case 'tablebordercolor':
                                 //    $tbAttrNm = 'border-color';
                                 //    break;
-                                case 'tablebgcolor':
-                                    $tbAttrNm = 'background-color';
-                                    break;
                                 case 'tablewidth':
                                     $tbAttrNm = 'width';
                                     if($tbw[1] == '')
