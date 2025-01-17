@@ -1,4 +1,5 @@
 <?php
+namespace PressDo;
 /**
  * HTML Render for Tokenized Namumark
  * @author PRASEOD-
@@ -116,7 +117,9 @@ class HTMLRenderer
                         else
                             $classStr = '';
     
-                        $result .= '<a class="'.$classStr.'" href="'.$t['href'].'" title="'.$t['target'].'">'.$t['text'].'</a>';
+                        $result .= '<a class="'.$classStr.'" href="'.$t['href'].'" title="'.
+                            ($t['href'][0] == '#' ? '' : $t['target'])
+                            .'">'.$t['text'].'</a>';
                     }
                     break;
             }

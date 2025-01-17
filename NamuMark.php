@@ -22,21 +22,14 @@
  * 코드 설명 주석 추가: PRASEOD-
  * 설명 주석이 +로 시작하는 경우 PRASEOD-의 2차 수정 과정에서 추가된 코드입니다.
  */
+namespace PressDo;
 require 'HTMLRenderer.php';
 
-class WikiPage {
+class NWPage {
     // 평문 데이터 호출
     public $lastchanged;
     function __construct(public $text) {
         $this->lastchanged = time();
-    }
-
-    function pageExists($target) {
-        return false;
-    }
-    
-    function includePage($target) {
-        return '[include 된 문서]';
     }
 }
 
@@ -49,6 +42,7 @@ class NamuMark {
 
     /**
      * include 문법으로 포함되는 문서인지의 여부 (기본값 false)
+     * true인 경우 틀이 로드되지 않음.
      */
     public bool $included = false;
     
@@ -79,10 +73,10 @@ class NamuMark {
     /**
      * Database 객체. false인 경우 DB 기능을 사용하지 않음.
      */
-    public bool|PDO $db;
+    public $db;
     
     public $intable, $category = [], $firstlinebreak = false, $fromblockquote = false;
-    private $WikiPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
+    private $NWPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
 
     private static $list_tags = [
         '*' => 'wiki-ul',
@@ -128,12 +122,6 @@ class NamuMark {
         [
             'open'    => '\'\'',
             'close' => '\'\'',
-            'multiline' => false,
-            'processor' => 'textProcessor'
-        ],
-        [
-            'open'    => '**',
-            'close' => '**',
             'multiline' => false,
             'processor' => 'textProcessor'
         ],
@@ -197,7 +185,14 @@ class NamuMark {
         'objectivec','perl','php','powershell','python','ruby','rust','sh','sql','swift','typescript','xml'
     ];
 
-    private $macro_processors = [], $toc = [], $fn = [], $fn_overview = [], $links = [], $fnset = [];
+    private static $renderpoint = ["\n", '{{{', '}}}', '[', ']', '~~', '--', ',,', '__', '\\', "''", '^^'];
+
+    /**
+     * 링크 데이터 (역링크 산출용)
+     */
+    public $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => []];
+
+    private $macro_processors = [], $toc = [], $fn = [], $fn_overview = [], $fnset = [];
     private $fn_names = [], $fn_cnt = 0, $ind_level = 0, $lastfncount = 0, $bqcount = 0;
 
     function __construct()
@@ -207,6 +202,15 @@ class NamuMark {
         $this->noredirect = 0; // redirect
         $this->inThread = false; // 토론창 여부
         $this->linenotend = false; // lineParser 개행구분용
+    }
+
+    private static function pageExists($target) {
+        list($rawns, $namespace, $title) = WikiPage::parse_title($target);
+        return Models::exist($rawns, $title);
+    }
+    
+    function includePage($target) {
+        return '[include 된 문서]';
     }
 
     /**
@@ -246,9 +250,9 @@ class NamuMark {
         if(str_starts_with($text, '#') && preg_match('/^#(redirect|넘겨주기) (.+)$/im', $text, $target) && $this->inThread !== false) {
             $rd = 1;
             $html = $this->linkProcessor($text, $rd);
-            array_push($this->links, ['target' => $target[2], 'type'=>'redirect']); // backlink
-            if($this->noredirect == 0)
-                header('Location: /w/'.$target[2]); // redirect only valid link
+            array_push($this->links['redirect'], $rd['target']); // backlink
+            if(!in_array('not-exist', $rd['class']) && $this->noredirect == 0)
+                header('Location: /w/'.$target[1]); // redirect only valid link
             $result = array_merge($result, $html);
         }
 
@@ -562,6 +566,9 @@ class NamuMark {
                                 //case 'tablebordercolor':
                                 //    $tbAttrNm = 'border-color';
                                 //    break;
+                                case 'tablebgcolor':
+                                    $tbAttrNm = 'background-color';
+                                    break;
                                 case 'tablewidth':
                                     $tbAttrNm = 'width';
                                     if($tbw[1] == '')
@@ -1017,7 +1024,7 @@ class NamuMark {
             }elseif(str_starts_with(substr($line,$j), 'attachment') && preg_match('/attachment:([^\/]*\/)?([^ ]+\.(?:jpg|jpeg|png|gif|svg))(?:\?([^ ]+))?/i', $line, $match, 0, $j) && $this->inThread !== false) {
                 // 파일
                 if($this->imageAsLink)
-                    $innerstr = '<span class="alternative">[<a class="external" target="_blank" href="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->WikiPage->title).'__').$match[2].'">image</a>]</span>';
+                    $innerstr = '<span class="alternative">[<a class="external" target="_blank" href="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->NWPage->title).'__').$match[2].'">image</a>]</span>';
                 else {
                     $paramtxt = '';
                     $csstxt = '';
@@ -1047,7 +1054,7 @@ class NamuMark {
                         }
                     }
                     $paramtxt .= ($csstxt!=''?' style="'.$csstxt.'"':'');
-                    $innerstr = '<img src="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->WikiPage->title).'__').$match[2].'"'.$paramtxt.'>';
+                    $innerstr = '<img src="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->NWPage->title).'__').$match[2].'"'.$paramtxt.'>';
                 }
                 $line = substr($line, 0, $j).$innerstr.substr($line, $j+strlen($match[0]));
                 $line_len = strlen($line);
@@ -1097,7 +1104,8 @@ class NamuMark {
         } elseif(preg_match('/^(#[A-Fa-f0-9]{3}|#[A-Fa-f0-9]{6}|#([A-Za-z]+)) (.*)/', $text, $color) && (self::chkColor($color[1]) || self::chkColor($color[2]))) {
             //if(empty($color[1]))
             //    return [['type' => 'plaintext', 'text' => $text]];
-            return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1])))]];
+            // 실제로는 작동하지 않는 영역으로 추정.
+            return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1]) + 1))]];
         } else {
             return [['type' => 'rawtext', 'text' => htmlspecialchars($text)]];
             // 문법 이스케이프
@@ -1108,14 +1116,15 @@ class NamuMark {
     private function linkProcessor($text, &$rd=0): array
     {
         $target = null;
+        $locallink = false;
         $display = null;
-        $sharp = '';
         $inSharp = '';
         $href = null;
         $unloadedstr = '';
         $classList = [];
         $imgAttr = '';
         $len = strlen($text);
+        $forcetext = false;
         $exception = '';
         /*
         * img attr
@@ -1127,20 +1136,72 @@ class NamuMark {
 
         */
 
-        if(strpos($text, '파일:') === 0){
-            $linkpart = explode('|', $text);
-            //if(!$this->WikiPage->pageExists($linkpart[0])){
-            //    return ['type' => 'link', 'linktype' => 'file', 'class' => ['wiki-link-internal', 'not-exist'], 'href' => '/w/'.$linkpart[0], 'text' => $linkpart[0]];
-            //}
+        // 처리 순서: 문서명 > # > |
+        for($i=0; $i<$len; self::nextChar($text,$i)){
+            $now = self::getChar($text,$i);
+            if($i === 0 && $now == ':'):
+                $forcetext = true;
+                continue;
+            elseif($now == "\\"):
+                // escape
+                ++$i;
+                $unloadedstr .= self::getChar($text,$i);
+                continue;
+            elseif($now == '#' && $target === null):
+                if($i === 0):
+                    // #으로 시작
+                    $locallink = true;
+                    $target = $this->title;
+                elseif($target == null):
+                    // 문서명 뒤의 #
+                    $target = $unloadedstr;
+                    $unloadedstr = '';
+                endif;
+                $inSharp = '#';
+            elseif($now == '|'):
+                if($inSharp == '#'){
+                    $inSharp = $unloadedstr;
+                    $unloadedstr = '';
+                    continue;
+                }elseif($target === null){
+                    $target = $unloadedstr;
+                    $unloadedstr = '';
+                    continue;
+                }
+            endif;
+
+            $unloadedstr .= $now;
+        }
+
+        if($target === null && $inSharp == ''){
+            // normal link
+            $target = $display = $unloadedstr;
+            $unloadedstr = '';
+        }elseif($inSharp == '#' && $unloadedstr[0] == '#'){
+            // link ended with #-string
+            $inSharp = $unloadedstr;
+            $unloadedstr = '';
+            if($locallink)
+                $display = $inSharp;
+            else
+                $display = $target;
+        }
+
+        if(strpos($target, '파일:') === 0){
+            // 파일 삽입
             $imgAlign = 'normal';
             $changed = '';
             $preserved = '';
             $wrapTag = '';
             $bgcolor = '';
-            if(count($linkpart) > 1){
-                $options = explode('&', $linkpart[1]);
+            if(strlen($unloadedstr) > 0){
+                $options = explode('&', $unloadedstr);
                 foreach($options as $option){
                     $opt = explode('=', $option);
+
+                    // this is not option string
+                    if(count($opt) < 2)
+                        continue;
 
                     if(($opt[0] == 'height' || $opt[0] == 'width') && !preg_match('/^[0-9]/', $opt[1]) || ($opt[0] == 'align' && !in_array($opt[1], ['left', 'center', 'right','middle','bottom','top'])) || !self::chkColor($opt[1])){
                         // invalid format
@@ -1178,7 +1239,7 @@ class NamuMark {
                 $attr_wrapper = ' style="'.$preserved.$bgcolor.'"';
             }
 
-            $fileName = substr($linkpart[0], strlen('파일:'));
+            $fileName = substr($target, strlen('파일:'));
             if(strpos($fileName, '.') !== false){
                 $fnexp = explode('.', $fileName);
                 $fnWithoutExt = implode('.', array_slice($fnexp, 0, count($fnexp) - 1));
@@ -1187,67 +1248,25 @@ class NamuMark {
             }
             
             $href = '/file/'.hash('sha256', $fileName);
-            if($rd === 0) array_push($this->links, ['target'=>$linkpart[0], 'type'=>'file']);
+            if($rd === 0) array_push($this->links['file'], $target);
             
-            if($rd !== 0) $rd = ['target' => $linkpart[0], 'class' => $classList];
-            return [['type' => 'link', 'linktype' => 'file', 'class' => ['wiki-link-internal'], 'href' => $href, 'text' => $linkpart[0], 'imgalign' => $imgAlign, 'attralign' => $attr_align, 'attrwrapper' => $attr_wrapper, 'wraptag' => $wrapTag, 'fnwithouttext' => $fnWithoutExt]];
-        }elseif(strpos($text, '분류:') === 0){
-            array_push($this->category, substr($text, strlen('분류:')));
-            if($rd === 0) array_push($this->links, ['target'=>$target, 'type'=>'category']);
+            if($rd !== 0) $rd = ['target' => $target, 'class' => $classList];
+
+            return [['type' => 'link', 'linktype' => 'file', 'class' => ['wiki-link-internal'], 'href' => $href, 'text' => $target, 'imgalign' => $imgAlign, 'attralign' => $attr_align, 'attrwrapper' => $attr_wrapper, 'wraptag' => $wrapTag, 'fnwithouttext' => $fnWithoutExt]];
+        }elseif(strpos($target, '분류:') === 0){
+            // 분류 삽입
+            array_push($this->category, substr($target, strlen('분류:')));
             if($rd !== 0) $rd = ['target' => $text, 'class' => $classList];
             return [['type' => 'void']];
-        }
-
-        for($i=0; $i<$len; self::nextChar($text,$i)){
-            $now = self::getChar($text,$i);
-            if($now == "\\"):
-                ++$i;
-                if($target !== null)
-                    $unloadedstr .= self::getChar($text,$i);
-                else
-                    $inSharp .= self::getChar($text,$i);
-                continue;
-            elseif($now == '#' && $target === null):
-                $unloadedstr .= $inSharp;
-                $inSharp = '#';
-                continue;
-            elseif($now == '|' && $target === null):
-                if($unloadedstr == '')
-                    $target = $inSharp;
-                else
-                    $target = $unloadedstr;
-                //$inSharp = '';
-                $unloadedstr = '';
-                continue;
-            elseif($target !== null):
-                // url target 지정 시 영향받지 않음
-            endif;
-            if($target !== null)
-                $unloadedstr .= $now;
-            else
-                $inSharp .= $now;
-        }
-        
-        if($target === null){
-            if($inSharp[0] == '#' && $unloadedstr == '')
-                $target = $inSharp;
-            elseif($inSharp[0] == '#')
-                $target = $unloadedstr;
-            else
-                $target = $unloadedstr.$inSharp;
-        }else
+        }elseif($display === null){
+            // 별도 렌더링(|가 있는 링크)
             $display = $this->blockParser($unloadedstr);
-        
-        if($sharp == '' && $inSharp[0] == '#')
-            $sharp = $inSharp;
-        $unloadedstr = '';
-        
-
-        if($display === null){
-            $display = $target;
+            
+            $unloadedstr = '';
         }
 
         if(preg_match('@^https?://([^\.]+\.)+[^\.]{2,}$@', $target, $domain)){
+            // URL
             $href = $target;
             array_push($classList, 'wiki-link-external');
         }else{
@@ -1269,28 +1288,25 @@ class NamuMark {
                 
                 //$display = $target;
             }
-            
-            if(strpos($target, '#') === 0){
-                $href = '';
-                $target = '';
-            }
 
-            if($target == $this->title && $sharp == '')
+            if($target == $this->title && !$locallink)
                 array_push($classList, 'wiki-self-link');
             elseif($rd === 0){
-                array_push($this->links, ['target'=>$target, 'type'=>'link']);
+                array_push($this->links['link'], $target);
                 array_push($classList, 'wiki-link-internal');
             }
-            if($href === null)
-                $href = '/w/'.$target.$exception;
+
+            if($locallink)
+                $href = $inSharp;
+            elseif($href === null)
+                $href = '/w/'.$target.$inSharp;
         }
 
-        //if(in_array('wiki-link-internal', $classList) && !$this->WikiPage->pageExists($target))
-        //    array_push($classList, 'not-exist');
+        if(in_array('wiki-link-internal', $classList) && !self::pageExists($target))
+            array_push($classList, 'not-exist');
         
-        if($rd !== 0) $rd = ['target' => $target.$exception, 'class' => $classList];
-        
-        return [['type' => 'link', 'linktype' => 'general', 'class' => $classList, 'target' => $target, 'href' => $href.$sharp, 'text' => $display]];
+        if($rd !== 0) $rd = ['target' => $target, 'class' => $classList];
+        return [['type' => 'link', 'linktype' => 'general', 'class' => $classList, 'target' => $target, 'href' => $href, 'text' => $display]];
     }
 
     // 대괄호 문법
@@ -1327,8 +1343,8 @@ class NamuMark {
                         return [['type' => 'void']];
 
                     $include = explode(',', $include);
-                    array_push($this->links, array('target'=>$include[0], 'type'=>'include'));
-                    /*if(($page = $this->WikiPage->getPage($include[0])) && !empty($page->text)) {
+                    array_push($this->links['include'], $include[0]);
+                    /*if(($page = $this->NWPage->getPage($include[0])) && !empty($page->text)) {
                         foreach($include as $var) {
                             $var = explode('=', ltrim($var));
                             if(empty($var[1]))
@@ -1524,7 +1540,7 @@ class NamuMark {
                 elseif(preg_match('/^(#[A-Fa-f0-9]{3}|#[A-Fa-f0-9]{6}|#([A-Za-z]+)) (.*)/', $text, $color) && (self::chkColor($color[1]) || self::chkColor($color[2]))) {
                     //if(empty($color[1]) && empty($color[2]))
                     //    return [['type' => 'plaintext', 'text' => $text]];
-                    return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1])))]];
+                    return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1]) + 1))]];
                 }else // 문법 이스케이프
                     return [['type' => 'escape', 'text' => htmlspecialchars($text)]];
             }
@@ -1585,6 +1601,20 @@ class NamuMark {
         if($offset >= strlen($text) || $offset < 0)
             return strlen($text);
         return ($r=strpos($text, $str, $offset))===false?strlen($text):$r;
+    }
+
+    private static function jumpStr($string, int &$pointer)
+    {
+        if(!isset($string[$pointer]))
+            return false;
+        $target_point = ['pos' => null, 'char' => null];
+        
+        foreach(static::$renderpoint as $target){
+            $pos = strpos($string, $target, $pointer);
+            if($target_point['pos'] > $pos || $target_point['pos'] === null)
+                $target_point = ['pos' => $pos, 'char' => $target];
+        }
+        $pointer = $target_point['pos'];
     }
 
     private static function chkColor(string $color, $sharp = '#'): bool
