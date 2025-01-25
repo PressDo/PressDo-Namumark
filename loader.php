@@ -9,7 +9,6 @@ function loadMarkUp($content, array $options){
     $wEngine->title = $options['title'];
     $wEngine->inThread = $options['thread'];
     $wEngine->db = $options['db'];
-    $wEngine->ns = $options['namespace'];
     
     $content = str_replace("\r\n", "\n", $content);
     $wHtml = $wEngine->toHtml($content);

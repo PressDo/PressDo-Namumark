@@ -191,6 +191,7 @@ class NamuMark {
      * 링크 데이터 (역링크 산출용)
      */
     public $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => []];
+    public static $lnkvalidity = [];
 
     private $macro_processors = [], $toc = [], $fn = [], $fn_overview = [], $fnset = [];
     private $fn_names = [], $fn_cnt = 0, $ind_level = 0, $lastfncount = 0, $bqcount = 0;
@@ -205,8 +206,15 @@ class NamuMark {
     }
 
     private static function pageExists($target) {
-        list($rawns, $namespace, $title) = WikiPage::parse_title($target);
-        return Models::exist($rawns, $title);
+        list($namespace, $title) = WikiPage::parse_title($target);
+        // 각 링크의 유효성은 1번씩만 조회됨
+        if(isset(self::$lnkvalidity[$namespace.':'.$title]))
+            return self::$lnkvalidity[$namespace.':'.$title];
+        else{
+            $check = (Models::get_doc_uuid($namespace, $title) !== false);
+            self::$lnkvalidity[$namespace.':'.$title] = $check;
+            return $check;
+        }
     }
     
     function includePage($target) {
@@ -229,6 +237,7 @@ class NamuMark {
         $this->htr->fn_overview = $this->fn_overview;
         $this->htr->fn = $this->fn;
         $this->htr->fnset = $this->fnset;
+        $this->htr->title = $this->title;
         unset($wtext);
         return ($this->wikitextbox?$this->htr->render($token):'<div id="content-s-0" class="wiki-heading-content">'.$this->htr->render($token).'</div>');
     }
@@ -247,12 +256,13 @@ class NamuMark {
         $bracketEntry = false;
 
         // 리다이렉트 문법
-        if(str_starts_with($text, '#') && preg_match('/^#(redirect|넘겨주기) (.+)$/im', $text, $target) && $this->inThread !== false) {
+        if(str_starts_with($text, '#') && preg_match('/^#(redirect|넘겨주기) (.+)$/im', $text, $target) && $this->inThread == false) {
             $rd = 1;
             $html = $this->linkProcessor($text, $rd);
             array_push($this->links['redirect'], $rd['target']); // backlink
+            var_dump($rd);
             if(!in_array('not-exist', $rd['class']) && $this->noredirect == 0)
-                header('Location: /w/'.$target[1]); // redirect only valid link
+                header('Location: /w/'.$target[2].'?from='.$this->title); // redirect only valid link
             $result = array_merge($result, $html);
         }
 
@@ -1203,30 +1213,48 @@ class NamuMark {
                     if(count($opt) < 2)
                         continue;
 
-                    if(($opt[0] == 'height' || $opt[0] == 'width') && !preg_match('/^[0-9]/', $opt[1]) || ($opt[0] == 'align' && !in_array($opt[1], ['left', 'center', 'right','middle','bottom','top'])) || !self::chkColor($opt[1])){
-                        // invalid format
-                        continue;
-                    }elseif(($opt[0] == 'height' || $opt[0] == 'width') && preg_match('/%$/', $opt[1]))
+                    if(($opt[0] == 'height' || $opt[0] == 'width') && preg_match('/%$/', $opt[1]))
                         $opt[1] = intval($opt[1]).'%';
                     else
                         $opt[1] = intval($opt[1]).'px';
 
                     switch($opt[0]){
                         case 'width':
+                            if(!preg_match('/^[0-9]/', $opt[1]))
+                                continue;
                             $changed .= 'width: '.$opt[1].';';
                             $preserved .= 'width: 100%;';
                             $wrapTag .= ' width="100%"';
                             break;
                         case 'height':
+                            if(!preg_match('/^[0-9]/', $opt[1]))
+                                continue;
                             $changed .= 'height: '.$opt[1].';';
                             $preserved .= 'height: 100%;';
                             $wrapTag .= ' height="100%"';
                             break;
                         case 'align':
+                            if(!in_array($opt[1], ['left', 'center', 'right','middle','bottom','top']))
+                                continue;
                             $imgAlign = $opt[1];
                             break;
                         case 'bgcolor':
+                            if(!self::chkColor($opt[1]))
+                                continue;
                             $bgcolor .= 'background-color:'.$opt[1].';';
+                            break;
+                        case 'theme':
+                            if($opt[1] !== 'dark' && $opt[1] !== 'light')
+                                continue;
+                        case 'border-radius':
+                        case 'rendering':
+                            if($opt[1] !== 'pixelated')
+                                continue;
+                        case 'object-fit':
+                            if(!in_array($opt[1], ['fill', 'contain', 'cover','none','scale-down']))
+                                continue;
+                        default:
+                            continue;
                     }
                 }
             }
