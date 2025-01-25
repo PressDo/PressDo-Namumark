@@ -2,7 +2,7 @@
 namespace PressDo;
 if(!function_exists('loadMarkUp')){
 function loadMarkUp($content, array $options){
-    require_once 'NamuMark.php';
+    require_once 'Namumark.php';
     $wEngine = new NamuMark();
     $wEngine->noredirect = $options['noredirect'];
     $wEngine->prefix = "";
