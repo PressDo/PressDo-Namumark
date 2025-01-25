@@ -2,7 +2,7 @@
 /**
  * namumark.php - Namu Mark Renderer
  * Copyright (C) 2015 koreapyj koreapyj0@gmail.com
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -12,1098 +12,1646 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * @author koreapyj, 김동동(1st edited)
+ * @author aaei924(2nd edited)
  * 
+ * 코드 설명 주석 추가: PRASEOD-
+ * 설명 주석이 +로 시작하는 경우 PRASEOD-의 2차 수정 과정에서 추가된 코드입니다.
  */
+namespace PressDo;
+require 'HTMLRenderer.php';
 
-class PlainWikiPage {
-	public $title, $text, $lastchanged;
-	function __construct($text) {
-		$this->title = '(inline wikitext)';
-		$this->text = $text;
-		$this->lastchanged = time();
-	}
-
-	function getPage($name) {
-		return new PlainWikiPage('');
-	}
-}
-
-class MySQLWikiPage {
-	public $title, $text, $lastchanged;
-	private $sql;
-	function __construct($name, $_mysql) {
-		if(!($result = $_mysql->query('SELECT `text`, `lastchanged` FROM `documents` WHERE `document` = "'.$_mysql->real_escape_string($name).'"'))) {
-			return false;
-		}
-
-		if(!($row = $result->fetch_array(MYSQLI_NUM))) {
-			return false;
-		}
-		$this->title = $name;
-		$this->text = $row[0];
-		$this->lastchanged = $row[1]?strtotime($row[1]):false;
-		$this->sql = $_mysql;
-	}
-
-	function getPage($name) {
-		return new MySQLWikiPage($name, $this->sql);
-	}
+class NWPage {
+    // 평문 데이터 호출
+    public $lastchanged;
+    function __construct(public $text) {
+        $this->lastchanged = time();
+    }
 }
 
 class NamuMark {
-	public $prefix, $lastchange;
-
-	function __construct($wtext) {
-
-		$this->list_tag = array(
-			array('*', 'ul'),
-			array('1.', 'ol class="decimal"'),
-			array('A.', 'ol class="upper-alpha"'),
-			array('a.', 'ol class="lower-alpha"'),
-			array('I.', 'ol class="upper-roman"'),
-			array('i.', 'ol class="lower-roman"')
-			);
-
-		$this->h_tag = array(
-			array('/^====== (.*) ======/', 6),
-			array('/^===== (.*) =====/', 5),
-			array('/^==== (.*) ====/', 4),
-			array('/^=== (.*) ===/', 3),
-			array('/^== (.*) ==/', 2),
-			array('/^= (.*) =/', 1),
-
-			null
-			);
-
-		$this->multi_bracket = array(
-			array(
-				'open'	=> '{{{',
-				'close' => '}}}',
-				'multiline' => true,
-				'processor' => array($this,'renderProcessor')),
-			);
-
-		$this->single_bracket = array(
-			array(
-				'open'	=> '{{{',
-				'close' => '}}}',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> '{{|',
-				'close' => '|}}',
-				'multiline' => false,
-				'processor' => array($this,'closureProcessor')),
-			array(
-				'open'	=> '[[',
-				'close' => ']]',
-				'multiline' => false,
-				'processor' => array($this,'linkProcessor')),
-			array(
-				'open'	=> '[',
-				'close' => ']',
-				'multiline' => false,
-				'processor' => array($this,'macroProcessor')),
-
-			array(
-				'open'	=> '\'\'\'',
-				'close' => '\'\'\'',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> '\'\'',
-				'close' => '\'\'',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> '~~',
-				'close' => '~~',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> '--',
-				'close' => '--',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> '__',
-				'close' => '__',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> '^^',
-				'close' => '^^',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor')),
-			array(
-				'open'	=> ',,',
-				'close' => ',,',
-				'multiline' => false,
-				'processor' => array($this,'textProcessor'))
-			);
-
-		$this->macro_processors = array();
-		
-		$this->WikiPage = $wtext;
-		$this->imageAsLink = false;
-		$this->wapRender = false;
-
-		$this->toc = array();
-		$this->fn = array();
-		$this->category = array();
-		$this->links = array();
-		$this->fn_cnt = 0;
-		$this->prefix = '';
-		$this->prefix = '';
-		$this->included = false;
-	}
-
-	public function getLinks() {
-		if(empty($this->WikiPage->title))
-			return [];
-
-		if(empty($this->links)) {
-			$this->whtml = htmlspecialchars(@$this->WikiPage->text);
-			$this->whtml = $this->htmlScan($this->whtml);
-		}
-		return $this->links;
-	}
-
-	public function toHtml() {
-		if(empty($this->WikiPage->title))
-			return '';
-		$this->whtml = htmlspecialchars(@$this->WikiPage->text);
-		$this->whtml = $this->htmlScan($this->whtml);
-		return $this->whtml;
-	}
-
-	private function htmlScan($text) {
-		$result = '';
-		$len = strlen($text);
-		$now = '';
-		$line = '';
-
-		if(self::startsWith($text, '#') && preg_match('/^#(?:redirect|넘겨주기) (.+)$/im', $text, $target)) {
-			array_push($this->links, array('target'=>$target[1], 'type'=>'redirect'));
-			@header('Location: '.$this->prefix.'/'.self::encodeURI($target[1]));
-			return;
-		}
-
-		for($i=0;$i<$len && $i>=0;self::nextChar($text,$i)) {
-			$now = self::getChar($text,$i);
-			if($line == '' && $now == ' ' && $list = $this->listParser($text, $i)) {
-				$result .= ''
-					.$list
-					.'';
-				$line = '';
-				$now = '';
-				continue;
-			}
-
-			if($line == '' && self::startsWith($text, '|', $i) && $table = $this->tableParser($text, $i)) {
-				$result .= ''
-					.$table
-					.'';
-				$line = '';
-				$now = '';
-				continue;
-			}
-
-			if($line == '' && self::startsWith($text, '&gt;', $i) && $blockquote = $this->bqParser($text, $i)) {
-				$result .= ''
-					.$blockquote
-					.'';
-				$line = '';
-				$now = '';
-				continue;
-			}
-
-			foreach($this->multi_bracket as $bracket) {
-				if(self::startsWith($text, $bracket['open'], $i) && $innerstr = $this->bracketParser($text, $i, $bracket)) {
-					$result .= ''
-						.$this->lineParser($line)
-						.$innerstr
-						.'';
-					$line = '';
-					$now = '';
-					break;
-				}
-			}
-
-			if($now == "\n") { // line parse
-				$result .= $this->lineParser($line);
-				$line = '';
-			}
-			else
-				$line.=$now;
-		}
-		if($line != '')
-			$result .= $this->lineParser($line);
-
-		$result .= $this->printFootnote();
-
-		if(!empty($this->category)) {
-			$result .= '<div class="wiki-category"><h2>분류</h2><ul>';
-			foreach($this->category as $category) {
-				$result .= '<li>'.$this->linkProcessor(':분류:'.$category.'|'.$category, '[[').'</li>';
-			}
-			$result .= '</div>';
-		}
-		return $result;
-	}
-
-	private function bqParser($text, &$offset) {
-		$len = strlen($text);		
-		$innerhtml = '';
-		for($i=$offset;$i<$len;$i=self::seekEndOfLine($text, $i)+1) {
-			$eol = self::seekEndOfLine($text, $i);
-			if(!self::startsWith($text, '&gt;', $i)) {
-				// table end
-				break;
-			}
-			$i+=4;
-			$line = $this->formatParser(substr($text, $i, $eol-$i));
-			$line = preg_replace('/^(&gt;)+/', '', $line);
-			if($this->wapRender)
-				$innerhtml .= $line.'<br/>';
-			else
-				$innerhtml .= '<p>'.$line.'</p>';
-		}
-		if(empty($innerhtml))
-			return false;
-
-		$offset = $i-1;
-		return '<blockquote>'.$innerhtml.'</blockquote>';
-	}
-
-	private function tableParser($text, &$offset) {
-		$len = strlen($text);
-		$table = new HTMLElement('table');
-		$table->attributes['class'] = 'wiki-table';
-
-		if(!self::startsWith($text, '||', $offset)) {
-			// caption
-			$caption = new HTMLElement('caption');
-			$dummy=0;
-			$caption->innerHTML = $this->bracketParser($text, $offset, array('open' => '|','close' => '|','multiline' => true, 'strict' => false,'processor' => function($str) { return $this->formatParser($str); }));
-			$table->innerHTML .= $caption->toString();
-			$offset++;
-		}
-
-		for($i=$offset;$i<$len && ((!empty($caption) && $i === $offset) || (substr($text, $i, 2) === '||' && $i+=2));) {
-			if(!preg_match('/\|\|( *?(?:\n|$))/', $text, $match, PREG_OFFSET_CAPTURE, $i) || !isset($match[0]) || !isset($match[0][1]))
-				$rowend = -1;
-			else {
-				$rowend = $match[0][1];
-				$endlen = strlen($match[0][0]);
-			}
-			if($rowend === -1 || !$row = substr($text, $i, $rowend-$i))
-				break;
-			$i = $rowend+$endlen;
-			$row = explode('||', $row);
-
-			$tr = new HTMLElement('tr');
-			$simpleColspan = 0;
-			foreach($row as $cell) {
-				$td = new HTMLElement('td');
-
-				$cell = htmlspecialchars_decode($cell);
-				$cell = preg_replace_callback('/<(.+?)>/', function($match) use ($table, $tr, $td) {
-					$prop = $match[1];
-					switch($prop) {
-						case '(':
-							break;
-						case ':':
-							$td->style['text-align'] = 'center';
-							break;
-						case ')':
-							$td->style['text-align'] = 'right';
-							break;
-						default:
-							if(self::startsWith($prop, 'table')) {
-								$tbprops = explode(' ', $prop);
-								foreach($tbprops as $tbprop) {
-									if(!preg_match('/^([^=]+)=(?|"(.*)"|\'(.*)\'|(.*))$/', $tbprop, $tbprop))
-										continue;
-									switch($tbprop[1]) {
-										case 'align':
-										case 'tablealign':
-											switch($tbprop[2]) {
-												case 'left':
-#													$table->style['float'] = 'left';
-#													$table->attributes['class'].=' float';
-													break;
-												case 'center':
-													$table->style['margin-left'] = 'auto';
-													$table->style['margin-right'] = 'auto';
-													break;
-												case 'right':
-													$table->style['float'] = 'right';
-													$table->attributes['class'].=' float';
-													break;
-											}
-											break;
-										case 'bgcolor':
-											$table->style['background-color'] = $tbprop[2];
-											break;
-										case 'bordercolor':
-											$table->style['border-color'] = $tbprop[2];
-											$table->style['border-style'] = 'solid';
-											break;
-										case 'width':
-										case 'tablewidth':
-											$table->style['width'] = $tbprop[2];
-											break;
-									}
-								}
-							}
-							elseif(preg_match('/^(\||\-)([0-9]+)$/', $prop, $span)) {
-								if($span[1] == '-') {
-									$td->attributes['colspan'] = $span[2];
-									break;
-								}
-								elseif($span[1] == '|') {
-									$td->attributes['rowspan'] = $span[2];
-									break;
-								}
-							}
-							elseif(preg_match('/^#(?:([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6})|([A-Za-z]+))$/', $prop, $span)) {
-								$td->style['background-color'] = $span[1]?'#'.$span[1]:$span[2];
-								break;
-							}
-							elseif(preg_match('/^([^=]+)=(?|"(.*)"|\'(.*)\'|(.*))$/', $prop, $htmlprop)) {
-								switch($htmlprop[1]) {
-									case 'rowbgcolor':
-										$tr->style['background-color'] = $htmlprop[2];
-										break;
-									case 'bgcolor':
-										$td->style['background-color'] = $htmlprop[2];
-										break;
-									case 'width':
-										$td->style['width'] = is_numeric($htmlprop[2])?$htmlprop[2].'px':$htmlprop[2];
-										break;
-									case 'height':
-										$td->style['height'] = is_numeric($htmlprop[2])?$htmlprop[2].'px':$htmlprop[2];
-										break;
-									default:
-										return $match[0];
-								}
-							}
-							else {
-								return $match[0];
-							}
-					}
-					return '';
-				}, $cell);
-				$cell = htmlspecialchars($cell);
-
-				$cell = preg_replace('/^ ?(.+) ?$/', '$1', $cell);
-				if($cell=='') {
-					$simpleColspan += 1;
-					continue;
-				}
-
-				if($simpleColspan != 0) {
-					$td->attributes['colspan'] = $simpleColspan+1;
-					$simpleColspan = 0;
-				}
-
-				$lines = explode("\n", $cell);
-				foreach($lines as $line) {
-					$td->innerHTML .= $this->lineParser($line);
-				}
-
-				$tr->innerHTML .= $td->toString();
-			}
-			$table->innerHTML .= $tr->toString();
-		}
-		$offset = $i-1;
-		return $table->toString();
-	}
-
-	private function listParser($text, &$offset) {
-		$listTable = array();
-		$len = strlen($text);
-		$lineStart = $offset;
-
-		$quit = false;
-		for($i=$offset;$i<$len;$before=self::nextChar($text,$i)) {
-			$now = self::getChar($text,$i);
-			if($now == "\n" && empty($listTable[0])) {
-					return false;
-			}
-			if($now != ' ') {
-				if($lineStart == $i) {
-					// list end
-					break;
-				}
-
-				$match = false;
-
-				foreach($this->list_tag as $list_tag) {
-					if(self::startsWith($text, $list_tag[0], $i)) {
-
-						if(!empty($listTable[0]) && $listTable[0]['tag']=='indent') {
-							$i = $lineStart;
-							$quit = true;
-							break;
-						}
-
-						$eol = self::seekEndOfLine($text, $lineStart);
-						$tlen = strlen($list_tag[0]);
-						$innerstr = substr($text, $i+$tlen, $eol-($i+$tlen));
-						$this->listInsert($listTable, $innerstr, ($i-$lineStart), $list_tag[1]);
-						$i = $eol;
-						$now = "\n";
-						$match = true;
-						break;
-					}
-				}
-				if($quit)
-					break;
-
-				if(!$match) {
-					// indent
-					if(!empty($listTable[0]) && $listTable[0]['tag']!='indent') {
-						$i = $lineStart;
-						break;
-					}
-
-					$eol = self::seekEndOfLine($text, $lineStart);
-					$innerstr = substr($text, $i, $eol-$i);
-					$this->listInsert($listTable, $innerstr, ($i-$lineStart), 'indent');
-					$i = $eol;
-					$now = "\n";
-				}
-			}
-			if($now == "\n") {
-				$lineStart = $i+1;
-			}
-		}
-		if(!empty($listTable[0])) {
-			$offset = $i-1;
-			return $this->listDraw($listTable);
-		}
-		return false;
-	}
-
-	private function listInsert(&$arr, $text, $level, $tag) {
-		if(preg_match('/^#([1-9][0-9]*) /', $text, $start))
-			$start = $start[1];
-		else
-			$start = 1;
-		if(empty($arr[0])) {
-			$arr[0] = array('text' => $text, 'start' => $start, 'level' => $level, 'tag' => $tag, 'childNodes' => array());
-			return true;
-		}
-
-		$last = count($arr)-1;
-		$readableId = $last+1;
-		if($arr[0]['level'] >= $level) {
-			$arr[] = array('text' => $text, 'start' => $start, 'level' => $level, 'tag' => $tag, 'childNodes' => array());
-			return true;
-		}
-		
-		return $this->listInsert($arr[$last]['childNodes'], $text, $level, $tag);
-	}
-
-	private function listDraw($arr) {
-		if(empty($arr[0]))
-			return '';
-
-		$tag = $arr[0]['tag'];
-		$start = $arr[0]['start'];
-		$result = '<'.($tag=='indent'?'div class="indent"':$tag.($start!=1?' start="'.$start.'"':'')).'>';
-		foreach($arr as $li) {
-			$text = $this->blockParser($li['text']).$this->listDraw($li['childNodes']);
-			$result .= $tag=='indent'?$text:'<li>'.$text.'</li>';
-		}
-		$result .= '</'.($tag=='indent'?'div':$tag).'>';
-		return $result;
-	}
-
-	private function lineParser($line) {
-		$result = '';
-		$line_len = strlen($line);
-
-		// comment
-		if(self::startsWith($line, '##')) {
-			$line = '';
-		}
-
-		// == Title ==
-		if(self::startsWith($line, '=') && preg_match('/^(=+) (.*) (=+)[ ]*$/', $line, $match) && $match[1]===$match[3]) {
-			$level = strlen($match[1]);
-			$innertext = $this->blockParser($match[2]);
-			$id = $this->tocInsert($this->toc, $innertext, $level);
-			$result .= '<h'.$level.' id="s-'.$id.'"><a name="s-'.$id.'" href="#toc">'.$id.'</a>. '.$innertext.'</h'.$level.'>';
-			$line = '';
-		}
-
-		// hr
-		if($line == '----') {
-			$result .= '<hr>';
-			$line = '';
-		}
-
-		$line = $this->blockParser($line);
-
-		if($line != '') {
-			if($this->wapRender)
-				$result .= $line.'<br/><br/>';
-			else
-				$result .= '<p>'.$line.'</p>';
-		}
-
-		return $result;
-	}
-
-	private function blockParser($block) {
-		return $this->formatParser($block);
-	}
-
-	private function bracketParser($text, &$now, $bracket) {
-		$len = strlen($text);
-		$cnt = 0;
-		$done = false;
-
-		$openlen = strlen($bracket['open']);
-		$closelen = strlen($bracket['close']);
-
-		if(!isset($bracket['strict']))
-			$bracket['strict'] = true;
-
-		for($i=$now;$i<$len;self::nextChar($text,$i)) {
-			if(self::startsWith($text, $bracket['open'], $i) && !($bracket['open']==$bracket['close'] && $cnt>0)) {
-				$cnt++;
-				$done = true;
-				$i+=$openlen-1; // 반복될 때 더해질 것이므로
-			}elseif(self::startsWith($text, $bracket['close'], $i)) {
-				$cnt--;
-				$i+=$closelen-1;
-			}elseif(!$bracket['multiline'] && $text[$i] == "\n")
-				return false;
-
-			if($cnt == 0 && $done) {
-				$innerstr = substr($text, $now+$openlen, $i-$now-($openlen+$closelen)+1);
-
-				if(($bracket['strict'] && $bracket['multiline'] && strpos($innerstr, "\n")===false))
-					return false;
-				$result = call_user_func_array($bracket['processor'],array($innerstr, $bracket['open']));
-				$now = $i;
-				return $result;
-			}
-		}
-		return false;
-	}
-
-	private function formatParser($line) {
-		$line_len = strlen($line);
-		for($j=0;$j<$line_len;self::nextChar($line,$j)) {
-			if(self::startsWith($line, 'http', $j) && preg_match('/(https?:\/\/[^ ]+\.(jpg|jpeg|png|gif))(?:\?([^ ]+))?/i', $line, $match, 0, $j)) {
-				if($this->imageAsLink)
-					$innerstr = '<span class="alternative">[<a class="external" target="_blank" href="'.$match[1].'">image</a>]</span>';
-				else {
-					$paramtxt = '';
-					$csstxt = '';
-					if(!empty($match[3])) {
-						preg_match_all('/[&?]?([^=]+)=([^\&]+)/', htmlspecialchars_decode($match[3]), $param, PREG_SET_ORDER);
-						foreach($param as $pr) {
-							switch($pr[1]) {
-								case 'width':
-									if(preg_match('/^[0-9]+$/', $pr[2]))
-										$csstxt .= 'width: '.$pr[2].'px; ';
-									else
-										$csstxt .= 'width: '.$pr[2].'; ';
-									break;
-								case 'height':
-									if(preg_match('/^[0-9]+$/', $pr[2]))
-										$csstxt .= 'height: '.$pr[2].'px; ';
-									else
-										$csstxt .= 'height: '.$pr[2].'; ';
-									break;
-								case 'align':
-									if($pr[2]!='center')
-										$csstxt .= 'float: '.$pr[2].'; ';
-									break;
-								default:
-									$paramtxt.=' '.$pr[1].'="'.$pr[2].'"';
-							}
-						}
-					}
-					$paramtxt .= ($csstxt!=''?' style="'.$csstxt.'"':'');
-					$innerstr = '<img src="'.$match[1].'"'.$paramtxt.'>';
-				}
-				$line = substr($line, 0, $j).$innerstr.substr($line, $j+strlen($match[0]));
-				$line_len = strlen($line);
-				$j+=strlen($innerstr)-1;
-				continue;
-			}elseif(self::startsWith($line, 'attachment', $j) && preg_match('/attachment:([^\/]*\/)?([^ ]+\.(?:jpg|jpeg|png|gif))(?:\?([^ ]+))?/i', $line, $match, 0, $j)) {
-				if($this->imageAsLink)
-					$innerstr = '<span class="alternative">[<a class="external" target="_blank" href="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->WikiPage->title).'__').$match[2].'">image</a>]</span>';
-				else {
-					$paramtxt = '';
-					$csstxt = '';
-					if(!empty($match[3])) {
-						preg_match_all('/([^=]+)=([^\&]+)/', $match[3], $param, PREG_SET_ORDER);
-						foreach($param as $pr) {
-							switch($pr[1]) {
-								case 'width':
-									if(preg_match('/^[0-9]+$/', $pr[2]))
-										$csstxt .= 'width: '.$pr[2].'px; ';
-									else
-										$csstxt .= 'width: '.$pr[2].'; ';
-									break;
-								case 'height':
-									if(preg_match('/^[0-9]+$/', $pr[2]))
-										$csstxt .= 'height: '.$pr[2].'px; ';
-									else
-										$csstxt .= 'height: '.$pr[2].'; ';
-									break;
-								case 'align':
-									if($pr[2]!='center')
-										$csstxt .= 'float: '.$pr[2].'; ';
-									break;
-								default:
-									$paramtxt.=' '.$pr[1].'="'.$pr[2].'"';
-							}
-						}
-					}
-					$paramtxt .= ($csstxt!=''?' style="'.$csstxt.'"':'');
-					$innerstr = '<img src="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->WikiPage->title).'__').$match[2].'"'.$paramtxt.'>';
-				}
-				$line = substr($line, 0, $j).$innerstr.substr($line, $j+strlen($match[0]));
-				$line_len = strlen($line);
-				$j+=strlen($innerstr)-1;
-				continue;
-			} else {
-				foreach($this->single_bracket as $bracket) {
-					$nj=$j;
-					if(self::startsWith($line, $bracket['open'], $j) && $innerstr = $this->bracketParser($line, $nj, $bracket)) {
-						$line = substr($line, 0, $j).$innerstr.substr($line, $nj+1);
-						$line_len = strlen($line);
-						$j+=strlen($innerstr)-1;
-						break;
-					}
-				}
-			}
-		}
-		return $line;
-	}
-
-	private function renderProcessor($text, $type) {
-		if(self::startsWithi($text, '#!html')) {
-			$html = substr($text, 6);
-			$html = ltrim($html);
-			$html = htmlspecialchars_decode($html);
-			$html = self::inlineHtml($html);
-			return $html;
-		}
-		return '<pre><code>'.substr($text, 1).'</code></pre>';
-	}
-
-	private function closureProcessor($text, $type) {
-		return '<div class="wiki-closure">'.$this->formatParser($text).'</div>';
-	}
-
-	private function linkProcessor($text, $type) {
-		$href = explode('|', $text);
-		if(preg_match('/^https?:\/\//', $href[0])) {
-			$targetUrl = $href[0];
-			$class = 'externalLink unnamed external';
-			$target = '_blank';
-		}
-		elseif(preg_match('/^분류:(.+)$/', $href[0], $category)) {
-			array_push($this->links, array('target'=>$category[0], 'type'=>'category'));
-			if(!$this->included)
-				array_push($this->category, $category[1]);
-			return ' ';
-		}
-		elseif(preg_match('/^파일:(.+)$/', $href[0], $category)) {
-			array_push($this->links, array('target'=>$category[0], 'type'=>'file'));
-			if($this->imageAsLink)
-				return '<span class="alternative">[<a target="_blank" href="'.self::encodeURI($category[0]).'">image</a>]</span>';
-			
-			$paramtxt = '';
-			$csstxt = '';
-			if(!empty($href[1])) {
-				preg_match_all('/[&?]?([^=]+)=([^\&]+)/', htmlspecialchars_decode($href[1]), $param, PREG_SET_ORDER);
-				foreach($param as $pr) {
-					switch($pr[1]) {
-						case 'width':
-							if(preg_match('/^[0-9]+$/', $pr[2]))
-								$csstxt .= 'width: '.$pr[2].'px; ';
-							else
-								$csstxt .= 'width: '.$pr[2].'; ';
-							break;
-						case 'height':
-							if(preg_match('/^[0-9]+$/', $pr[2]))
-								$csstxt .= 'height: '.$pr[2].'px; ';
-							else
-								$csstxt .= 'height: '.$pr[2].'; ';
-							break;
-						case 'align':
-							if($pr[2]!='center')
-								$csstxt .= 'float: '.$pr[2].'; ';
-							break;
-						default:
-							$paramtxt.=' '.$pr[1].'="'.$pr[2].'"';
-					}
-				}
-			}
-			$paramtxt .= ($csstxt!=''?' style="'.$csstxt.'"':'');
-			return '<a href="'.$this->prefix.'/'.self::encodeURI($category[0]).'" title="'.htmlspecialchars($category[0]).'"><img src="https://namu.wiki/file/'.self::encodeURI($category[0]).'"'.$paramtxt.'></a>';
-		}
-		else {
-			if(self::startsWith($href[0], ':')) {
-				$href[0] = substr($href[0], 1);
-				$c=1;
-			}
-			$targetUrl = $this->prefix.'/'.self::encodeURI($href[0]);
-			if($this->wapRender && !empty($href[1]))
-				$title = $href[0];
-			if(empty($c))
-				array_push($this->links, array('target'=>$href[0], 'type'=>'link'));
-		}
-		return '<a href="'.$targetUrl.'"'.(!empty($title)?' title="'.$title.'"':'').(!empty($class)?' class="'.$class.'"':'').(!empty($target)?' target="'.$target.'"':'').'>'.(!empty($href[1])?$this->formatParser($href[1]):$href[0]).'</a>';
-	}
-
-	private function macroProcessor($text, $type) {
-		$macroName = strtolower($text);
-		if(!empty($this->macro_processors[$macroName]))
-			return $this->macro_processors[$macroName]();
-		switch($macroName) {
-			case 'br':
-				return '<br>';
-			case 'date':
-				return date('Y-m-d H:i:s');
-			case '목차':
-			case 'tableofcontents':
-				return $this->printToc();
-			case '각주':
-			case 'footnote':
-				return $this->printFootnote();
-			default:
-				if(self::startsWithi($text, 'include') && preg_match('/^include\((.+)\)$/i', $text, $include) && $include = $include[1]) {
-					if($this->included)
-						return ' ';
-
-					$include = explode(',', $include);
-					array_push($this->links, array('target'=>$include[0], 'type'=>'include'));
-					if(($page = $this->WikiPage->getPage($include[0])) && !empty($page->text)) {
-						foreach($include as $var) {
-							$var = explode('=', ltrim($var));
-							if(empty($var[1]))
-								$var[1]='';
-							$page->text = str_replace('@'.$var[0].'@', $var[1], $page->text);
-						}
-						$child = new NamuMark($page);
-						$child->prefix = $this->prefix;
-						$child->imageAsLink = $this->imageAsLink;
-						$child->wapRender = $this->wapRender;
-						$child->included = true;
-						return $child->toHtml();
-					}
-					return ' ';
-				}
-				elseif(self::startsWith($text, 'youtube') && preg_match('/^youtube\((.+)\)$/', $text, $include) && $include = $include[1]) {
-					$include = explode(',', $include);
-					$var = array();
-					foreach($include as $v) {
-						$v = explode('=', $v);
-						if(empty($v[1]))
-							$v[1]='';
-						$var[$v[0]] = $v[1];
-					}
-					return '<iframe width="'.(!empty($var['width'])?$var['width']:'640').'" height="'.(!empty($var['height'])?$var['height']:'360').'" src="//www.youtube.com/embed/'.$include[0].'" frameborder="0" allowfullscreen></iframe>';
-				}
-				elseif(self::startsWith($text, 'nicovideo') && preg_match('/^nicovideo\((.+)\)$/', $text, $include) && $include = $include[1]) {
-					$include = explode(',', $include);
-					$var = array();
-					foreach($include as $v) {
-						$v = explode('=', $v);
-						if(empty($v[1]))
-							$v[1]='';
-						$var[$v[0]] = $v[1];
-					}
-					return '<iframe width="'.(!empty($var['width'])?$var['width']:'640').'" height="'.(!empty($var['height'])?$var['height']:'360').'" src="http://ext.nicovideo.jp/thumb_watch/'.$include[0].'?w='.(!empty($var['width'])?$var['width']:'640').'&h='.(!empty($var['height'])?$var['height']:'360').'" frameborder="0" allowfullscreen></iframe>';
-				}
-				elseif(self::startsWith($text, '*') && preg_match('/^\*([^ ]*)([ ].+)?$/', $text, $note)) {
-					$notetext = !empty($note[2])?$this->blockParser($note[2]):'';
-					$id = $this->fnInsert($this->fn, $notetext, $note[1]);
-					$preview = $notetext;
-					$preview = strip_tags($preview);
-					$preview = str_replace('"', '\\"', $preview);
-					return '<a id="rfn-'.htmlspecialchars($id).'" class="wiki-fn" href="#fn-'.rawurlencode($id).'" title="'.$preview.'">['.($note[1]?$note[1]:$id).']</a>';
-				}
-		}
-		return '['.$text.']';
-	}
-
-	private function textProcessor($otext, $type) {
-		if($type != '{{{')
-			$text = $this->formatParser($otext);
-		else
-			$text = $otext;
-		switch($type) {
-			case '\'\'\'':
-				return '<strong>'.$text.'</strong>';
-			case '\'\'':
-				return '<em>'.$text.'</em>';
-			case '--':
-			case '~~':
-				return '<del>'.$text.'</del>';
-			case '__':
-				return '<u>'.$text.'</u>';
-			case '^^':
-				return '<sup>'.$text.'</sup>';
-			case ',,':
-				return '<sub>'.$text.'</sub>';
-			case '{{{':
-				if(self::startsWith($text, '#!html')) {
-					$html = substr($text, 6);
-					$html = ltrim($html);
-					$html = htmlspecialchars_decode($html);
-					$html = self::inlineHtml($html);
-#					echo $html;
-					return $html;
-				}
-				if(preg_match('/^#(?:([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6})|([A-Za-z]+)) (.*)$/', $text, $color)) {
-					if(empty($color[1]) && empty($color[2]))
-						return $text;
-					return '<span style="color: '.(empty($color[1])?$color[2]:'#'.$color[1]).'">'.$this->formatParser($color[3]).'</span>';
-				}
-				if(preg_match('/^\+([1-5]) (.*)$/', $text, $size)) {
-					return '<span class="wiki-size-'.$size[1].'">'.$this->formatParser($size[2]).'</span>';
-				}
-				return '<code>'.$text.'</code>';
-		}
-		return $type.$text.$type;
-	}
-
-	private function fnInsert(&$arr, &$text, $id = null) {
-		$arr_cnt = count($arr);
-		if(empty($id)) {
-			$multi = false;
-			$id = ++$this->fn_cnt;
-		}
-		else {
-			$multi = true;
-			for($i=0;$i<$arr_cnt;$i++) {
-				if($arr[$i]['id']==$id) {
-					$arr[$i]['count']++;
-					if(!empty(trim($text)))
-						$arr[$i]['text'] = $text;
-					else
-						$text = $arr[$i]['text'];
-					return $id.'-'.$arr[$i]['count'];
-				}
-			}
-		}
-		$arr[] = array('id' => $id, 'text' => $text, 'count' => 1);
-		return $multi?$id.'-1':$id;
-	}
-
-	private function printFootnote() {
-		if(count($this->fn)==0)
-			return '';
-
-		$result = $this->wapRender?'<hr>':'<hr><ol class="fn">';
-		foreach($this->fn as $k => $fn) {
-			$result .= $this->wapRender?'<p>':'<li>';
-			if($fn['count']>1) {
-				$result .= '['.$fn['id'].'] ';
-				for($i=0;$i<$fn['count'];$i++) {
-					$result .= '<a id="fn-'.htmlspecialchars($fn['id']).'-'.($i+1).'" href="#rfn-'.rawurlencode($fn['id']).'-'.($i+1).'">'.chr(ord('A') + $i).'</a> ';
-				}
-			}
-			else {
-				$result .= '<a id="fn-'.htmlspecialchars($fn['id']).'" href="#rfn-'.$fn['id'].'">['.$fn['id'].']</a> ';
-			}
-			$result .= $this->blockParser($fn['text'])
-								.($this->wapRender?'</p>':'</li>');
-		}
-		$result .= $this->wapRender?'':'</ol>';
-		$this->fn = array();
-		return $result;
-	}
-
-	private function tocInsert(&$arr, $text, $level, $path = '') {
-		if(empty($arr[0])) {
-			$arr[0] = array('name' => $text, 'level' => $level, 'childNodes' => array());
-			return $path.'1';
-		}
-
-		$last = count($arr)-1;
-		$readableId = $last+1;
-		if($arr[0]['level'] >= $level) {
-			$arr[] = array('name' => $text, 'level' => $level, 'childNodes' => array());
-			return $path.($readableId+1);
-		}
-		
-		return $this->tocInsert($arr[$last]['childNodes'], $text, $level, $path.$readableId.'.');
-	}
-
-	private function hParse(&$text) {
-		$lines = explode("\n", $text);
-		$result = '';
-		foreach($lines as $line) {
-			$matched = false;
-
-			foreach($this->h_tag as $tag_ar) {
-				$tag = $tag_ar[0];
-				$level = $tag_ar[1];
-				if(!empty($tag) && preg_match($tag, $line, $match)) {
-					$this->tocInsert($this->toc, $this->blockParser($match[1]), $level);
-					$matched = true;
-					break;
-				}
-			}
-		}
-
-		return $result;
-	}
-
-	private function printToc(&$arr = null, $level = -1, $path = '') {
-		if($level == -1) {
-			$bak = $this->toc;
-			$this->toc = array();
-			$this->hParse($this->WikiPage->text);
-			$result = ''
-				.'<div id="toc">'
-					.($this->wapRender!==false?'<h2>목차</h2>':'')
-					.$this->printToc($this->toc, 0)
-				.'</div>'
-				.'';
-			$this->toc = $bak;
-			return $result;
-		}
-
-		if(empty($arr[0]))
-			return '';
-
-		$result  = '<div class="indent">';
-		foreach($arr as $i => $item) {
-			$readableId = $i+1;
-			$result .= '<div><a href="#s-'.$path.$readableId.'">'.$path.$readableId.'</a>. '.$item['name'].'</div>'
-							.$this->printToc($item['childNodes'], $level+1, $path.$readableId.'.')
-							.'';
-		}
-		$result .= '</div>';
-		return $result;
-	}
-
-	private static function getChar($string, $pointer){
-		if(!isset($string[$pointer])) return false;
-		$char = ord($string[$pointer]);
-		if($char < 128){
-			return $string[$pointer];
-		}else{
-			if($char < 224){
-				$bytes = 2;
-			}elseif($char < 240){
-				$bytes = 3;
-			}elseif($char < 248){
-				$bytes = 4;
-			}elseif($char == 252){
-				$bytes = 5;
-			}else{
-				$bytes = 6;
-			}
-			$str = substr($string, $pointer, $bytes);
-			return $str;
-		}
-	}
-
-	private static function nextChar($string, &$pointer){
-		if(!isset($string[$pointer])) return false;
-		$char = ord($string[$pointer]);
-		if($char < 128){
-			return $string[$pointer++];
-		}else{
-			if($char < 224){
-				$bytes = 2;
-			}elseif($char < 240){
-				$bytes = 3;
-			}elseif($char < 248){
-				$bytes = 4;
-			}elseif($char == 252){
-				$bytes = 5;
-			}else{
-				$bytes = 6;
-			}
-			$str = substr($string, $pointer, $bytes);
-			$pointer += $bytes;
-			return $str;
-		}
-	}
-
-	private static function startsWith($haystack, $needle, $offset = 0) {
-		$len = strlen($needle);
-		if(($offset+$len)>strlen($haystack))
-			return false;
-		return $needle == substr($haystack, $offset, $len);
-	}
-
-	private static function startsWithi($haystack, $needle, $offset = 0) {
-		$len = strlen($needle);
-		if(($offset+$len)>strlen($haystack))
-			return false;
-		return strtolower($needle) == strtolower(substr($haystack, $offset, $len));
-	}
-
-	private static function seekEndOfLine($text, $offset=0) {
-		return self::seekStr($text, "\n", $offset);
-	}
-
-	private static function seekStr($text, $str, $offset=0) {
-		if($offset >= strlen($text) || $offset < 0)
-			return strlen($text);
-		return ($r=strpos($text, $str, $offset))===false?strlen($text):$r;
-	}
-
-	private static function inlineHtml($html) {
-		$html = str_replace("\n", '', $html);
-		$html = preg_replace('/<\/?(?:object|param)[^>]*>/', '', $html);
-		$html = preg_replace('/<embed([^>]+)>/', '<iframe$1 frameborder="0"></iframe>', $html);
-		$html = preg_replace('/(<img[^>]*[ ]+src=[\'\"]?)(https?\:[^\'\"\s]+)([\'\"]?)/', '$1$2$3', $html);
-		return $html;
-	}
-
-	function encodeURI($str) {
-		return str_replace(array('%3A', '%2F', '%23', '%28', '%29'), array(':', '/', '#', '(', ')'), rawurlencode($str));
-	}
-}
-
-class HTMLElement {
-	public $tagName, $innerHTML, $attributes;
-	function __construct($tagname) {
-		$this->tagName = $tagname;
-		$this->innerHTML = null;
-		$this->attributes = array();
-		$this->style = array();
-	}
-
-	public function toString() {
-		$style = $attr = '';
-		if(!empty($this->style)) {
-			foreach($this->style as $key => $value) {
-				$value = str_replace('\\', '\\\\', $value);
-				$value = str_replace('"', '\\"', $value);
-				$style.=$key.':'.$value.';';
-			}
-			$this->attributes['style'] = substr($style, 0, -1);
-		}
-		if(!empty($this->attributes)) {
-			foreach($this->attributes as $key => $value) {
-				$value = str_replace('\\', '\\\\', $value);
-				$value = str_replace('"', '\\"', $value);
-				$attr.=' '.$key.'="'.$value.'"';
-			}
-		}
-		return '<'.$this->tagName.$attr.'>'.$this->innerHTML.'</'.$this->tagName.'>';
-	}
+
+    /**
+     * 엔진에 표시되는 문서 제목
+     */
+    public string $title;
+
+    /**
+     * include 문법으로 포함되는 문서인지의 여부 (기본값 false)
+     * true인 경우 틀이 로드되지 않음.
+     */
+    public bool $included = false;
+    
+    /**
+     * 리다이렉트 문법에서 페이지를 이동시킬지의 여부
+     * ----
+     * 0일 경우 이동함 (기본값), 1일 경우 이동하지 않음
+     */
+    public int|null $noredirect = 0;
+
+    /**
+     * 토론문법 여부
+     * ----
+     * true일 경우 토론에서 허용되는 문법만 처리됨. (기본값 false)
+     */
+    public bool $inThread = false;
+    
+    /**
+     * 이름공간별 페이지 수가 모여 있는 배열. 허용할 매크로 인수를 키로, 페이지 수를 값으로 함.
+     */
+    public array $pageCount = [];
+
+    /**
+     * 유효하지 않은 pagecount() 인수에 대해 기본값으로 표출할 전체 페이지 수
+     */
+    public $totalPageCount = 0;
+
+    /**
+     * Database 객체. false인 경우 DB 기능을 사용하지 않음.
+     */
+    public $db;
+    
+    public $intable, $category = [], $firstlinebreak = false, $fromblockquote = false;
+    private $NWPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
+
+    private static $list_tags = [
+        '*' => 'wiki-ul',
+        '1.' => 'wiki-list',
+        'A.' => 'wiki-list wiki-list-upper-alpha',
+        'a.' => 'wiki-list wiki-list-alpha',
+        'I.' => 'wiki-list wiki-list-upper-roman',
+        'i.' => 'wiki-list wiki-list-roman'
+    ];
+
+    private static $brackets = [
+        [
+            'open'    => '{{{',
+            'close' => '}}}',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => '{{{',
+            'close' => '}}}',
+            'multiline' => true,
+            'processor' => 'renderProcessor'
+        ],
+        [
+            'open'    => '[[',
+            'close' => ']]',
+            'multiline' => false,
+            'processor' => 'linkProcessor'
+        ],
+        [
+            'open'    => '[',
+            'close' => ']',
+            'multiline' => false,
+            'processor' => 'macroProcessor'
+        ],
+
+        [
+            'open'    => '\'\'\'',
+            'close' => '\'\'\'',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => '\'\'',
+            'close' => '\'\'',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => '~~',
+            'close' => '~~',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => '--',
+            'close' => '--',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => '__',
+            'close' => '__',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => '^^',
+            'close' => '^^',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ],
+        [
+            'open'    => ',,',
+            'close' => ',,',
+            'multiline' => false,
+            'processor' => 'textProcessor'
+        ]
+    ];
+
+    private static $cssColors = [
+        'black','gray','grey','silver','white','red','maroon','yellow','olive','lime','green','aqua','cyan','teal','blue','navy','magenta','fuchsia','purple',
+        'dimgray','dimgrey','darkgray','darkgrey','lightgray','lightgrey','gainsboro','whitesmoke',
+        'brown','darkred','firebrick','indianred','lightcoral','rosybrown','snow','mistyrose','salmon','tomato','darksalmon','coral','orangered','lightsalmon',
+        'sienna','seashell','chocolate','saddlebrown','sandybrown','peachpuff','peru','linen','bisque','darkorange','burlywood','anaatiquewhite','tan','navajowhite',
+        'blanchedalmond','papayawhip','moccasin','orange','wheat','oldlace','floralwhite','darkgoldenrod','goldenrod','cornsilk','gold','khaki','lemonchiffon',
+        'palegoldenrod','darkkhaki','beige','ivory','lightgoldenrodyellow','lightyellow','olivedrab','yellowgreen','darkolivegreen','greenyellow','chartreuse',
+        'lawngreen','darkgreen','darkseagreen','forestgreen','honeydew','lightgreen','limegreen','palegreen','seagreen','mediumseagreen','springgreen','mintcream',
+        'mediumspringgreen','mediumaquamarine','aquamarine','turquoise','lightseagreen','mediumturquoise','azure','darkcyan','darkslategray','darkslategrey',
+        'lightcyan','paleturquoise','darkturquoise','cadetblue','powderblue','lightblue','deepskyblue','skyblue','lightskyblue','steelblue','aliceblue','dodgerblue',
+        'lightslategray','lightslategrey','slategray','slategrey','lightsteelblue','comflowerblue','royalblue','darkblue','ghostwhite','lavender','mediumblue',
+        'midnightblue','slateblue','darkslateblue','mediumslateblue','mediumpurple','rebeccapurple','blueviolet','indigo','darkorchid','darkviolet','mediumorchid',
+        'darkmagenta','plum','thistle','violet','orchid','mediumvioletred','deeppink','hotpink','lavenderblush','palevioletred','crimson','pink','lightpink'
+    ];
+
+    private static $videoURL = [
+        'youtube' => '//www.youtube.com/embed/',
+        'kakaotv' => '//tv.kakao.com/embed/player/cliplink/',
+        'nicovideo' => '//embed.nicovideo.jp/watch/',
+        'navertv' => '//tv.naver.com/embed/',
+        'vimeo' => '//player.vimeo.com/video/'
+    ];
+
+    private static $syntaxList = [
+        'basic','cpp','csharp','css','erlang','go','html','java','javascript','json','kotlin','lisp','lua','markdown',
+        'objectivec','perl','php','powershell','python','ruby','rust','sh','sql','swift','typescript','xml'
+    ];
+
+    private static $renderpoint = ["\n", '{{{', '}}}', '[', ']', '~~', '--', ',,', '__', '\\', "''", '^^'];
+
+    /**
+     * 링크 데이터 (역링크 산출용)
+     */
+    public $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => []];
+    public static $lnkvalidity = [];
+
+    private $macro_processors = [], $toc = [], $fn = [], $fn_overview = [], $fnset = [];
+    private $fn_names = [], $fn_cnt = 0, $ind_level = 0, $lastfncount = 0, $bqcount = 0;
+
+    function __construct()
+    {
+        // 문법 데이터 생성
+        $this->imageAsLink = false;
+        $this->noredirect = 0; // redirect
+        $this->inThread = false; // 토론창 여부
+        $this->linenotend = false; // lineParser 개행구분용
+    }
+
+    private static function pageExists($target) {
+        list($namespace, $title) = WikiPage::parse_title($target);
+        // 각 링크의 유효성은 1번씩만 조회됨
+        if(isset(self::$lnkvalidity[$namespace.':'.$title]))
+            return self::$lnkvalidity[$namespace.':'.$title];
+        else{
+            $check = (Models::get_doc_uuid($namespace, $title) !== false);
+            self::$lnkvalidity[$namespace.':'.$title] = $check;
+            return $check;
+        }
+    }
+    
+    function includePage($target) {
+        return '[include 된 문서]';
+    }
+
+    /**
+     * 나무마크 텍스트를 HTML로 렌더링합니다.
+     * @param string $wtext 나무마크 문자열
+     * @return string 변환된 HTML
+     */
+    public function toHtml(string $wtext): string
+    {
+        // 문법을 HTML로 변환하는 함수
+        $token = $this->htmlScan($wtext);
+        if(empty($this->htr)){
+            $this->htr = new HTMLRenderer();
+        }
+        $this->htr->toc = $this->toc;
+        $this->htr->fn_overview = $this->fn_overview;
+        $this->htr->fn = $this->fn;
+        $this->htr->fnset = $this->fnset;
+        $this->htr->title = $this->title;
+        unset($wtext);
+        return ($this->wikitextbox?$this->htr->render($token):'<div id="content-s-0" class="wiki-heading-content">'.$this->htr->render($token).'</div>');
+    }
+
+    /**
+     * 나무마크 텍스트를 배열 형태의 토큰으로 변환합니다.
+     * @param string $text 나무마크 문자열
+     * @return array 토큰화된 나무마크
+     */
+    private function htmlScan(string $text): array
+    {
+        $result = [];
+        $len = strlen($text);
+        $now = '';
+        $line = '';
+        $bracketEntry = false;
+
+        // 리다이렉트 문법
+        if(str_starts_with($text, '#') && preg_match('/^#(redirect|넘겨주기) (.+)$/im', $text, $target) && $this->inThread == false) {
+            $rd = 1;
+            $html = $this->linkProcessor($text, $rd);
+            array_push($this->links['redirect'], $rd['target']); // backlink
+            var_dump($rd);
+            if(!in_array('not-exist', $rd['class']) && $this->noredirect == 0)
+                header('Location: /w/'.$target[2].'?from='.$this->title); // redirect only valid link
+            $result = array_merge($result, $html);
+        }
+
+        // 문법 처리 순서: 리스트 > 인용문 > 삼중괄호 > 표 >
+        for($i=0;$i<$len;self::nextChar($text,$i)) {
+            $now = self::getChar($text,$i);
+            
+            //+ 백슬래시 문법
+            if($now == "\\"){
+                $line .= $now;
+                ++$i;
+                $line .= self::getChar($text,$i);
+                continue;
+            }
+            
+            // 리스트
+            if(!$this->linenotend && $line == '' && $now == ' ' && (!$this->wikitextbox || $this->firstlinebreak) && $inner = $this->listParser($text, $i)) {
+                array_push($result, $inner);
+                $line = '';
+                $now = '';
+                continue;
+            }
+
+            // 인용문
+            if($line == '' && str_starts_with(substr($text,$i), '>') && (!$this->wikitextbox || $this->firstlinebreak) && $inner = $this->bqParser($text, $i)) {
+                if($inner !== true){
+                    array_push($result, $inner);
+                    $line = '';
+                    $now = '';
+                }
+                continue;
+            }
+
+            // 사실상 삼중괄호전용
+            foreach(self::$brackets as $bracket) {
+                if(str_starts_with(substr($text,$i), $bracket['open']) && $bracket['multiline'] === true && $inner = $this->bracketParser($text, $i, $bracket)) {
+                    $this->linenotend = true;
+                    $result = array_merge($result, $this->lineParser($line), $inner);
+                    $line = '';
+                    $now = '';
+                    $bracketEntry = true;
+                    continue 2;
+                }
+            }
+
+            // 표
+            if($line == '' && str_starts_with(substr($text,$i), '|',) && $inner = $this->tableParser($text, $i)) {
+                array_push($result, $inner);
+                $line = '';
+                $now = '';
+                continue;
+            }
+
+            //+ 빈 줄 삽입 오류 수정
+            if($now == "\n" && $line == '' && !$bracketEntry){
+                // empty line
+                $this->linenotend = false;
+                if($this->wikitextbox && !$this->firstlinebreak){
+                    $this->firstlinebreak = true;
+                    continue;
+                }
+                $this->firstlinebreak = true;
+                array_push($result, ['type' => 'plaintext', 'text' => '<br>']);
+            }elseif($now == "\n") {
+                // something in line
+                $this->firstlinebreak = true;
+                $this->linenotend = false;
+                $line .= $now;
+                $result = array_merge($result, $this->lineParser($line));
+                $line = '';
+            }else
+                $line.= $now; //+ Anti-XSS
+        }
+        if($line != '')
+            $result = array_merge($result, $this->lineParser($line));
+        if($this->wikitextbox !== true){
+            array_push($this->fnset, $this->fn_names);
+            array_push($result, ['type' => 'footnotes', 'from' => $this->lastfncount, 'until' => $this->fn_cnt]);
+        }
+
+        // 분류 모음
+        if(!empty($this->category) && $this->inThread !== false) {
+            array_push($result, ['type' => 'categories']);
+            /* .= '<div id="categories" class="wiki-categories">
+                            <h2>분류</h2>
+                            <ul>';
+            foreach($this->category as $category) {
+                $result .= '<li class="wiki-categories">'.$this->linkProcessor(':분류:'.$category.'|'.$category, '[[').'</li>';
+            }
+            $result .= '</ul></div>';*/
+        }
+        unset($line, $text, $inner);
+        return $result;
+    }
+
+    //+ Rebuilt by PRASEOD-
+    private function bqParser($text, &$offset): array|false
+    {
+        $len = strlen($text);
+        $linestart = true;
+        $eol = false;
+        $innerstr = '';
+        $inEscape = 0;
+
+        if($this->bqcount > 7)
+            return true;
+
+        $this->bqcount++;
+        
+
+        for($i=$offset;$i<$len;self::nextChar($text, $i)) {
+            $now = self::getChar($text, $i);
+
+            if($linestart && $now == '>'){
+                $linestart = false;
+                if($eol){
+                    $innerstr .= "\n";
+                    $eol = false;
+                }
+                continue;
+            }elseif($linestart && $inEscape < 1)
+                break;
+            
+            if(str_starts_with(substr($text,$i), '{{{')){
+                $i += 2;
+                $innerstr .= '{{{';
+                $inEscape++;
+                continue;
+            }
+            if(str_starts_with(substr($text,$i), '}}}') && $inEscape > 0){
+                $i += 2;
+                $innerstr .= '}}}';
+                $inEscape--;
+                continue;
+            }
+            
+            if($linestart)
+                $linestart = false;
+
+            if($now == "\n"){
+                $linestart = $eol = true;
+            }
+
+            $innerstr .= $now;
+        }
+
+        $innerhtml = $this->blockParser($innerstr, true, true);
+        //var_dump($innerstr, htmlspecialchars($innerhtml));
+        $offset = $i-1;
+        $this->bqcount--;
+        return ['type' => 'blockquote', 'html' => $innerhtml];
+    }
+
+    //+ Rebuilt by PRASEOD-
+    private function tableParser($text, &$offset): array|false
+    {   
+        $token = ['type' => 'table', 'class' => [], 'caption' => null, 'colstyle' => [], 'rows' => []];
+        $tableinit = true;
+        $tableAttr = [];
+        $tableCls = [];
+        $tdAttr = [];
+        $tableattrinit = [];
+        $tdInnerStr = '';
+        $unloadedstr = '';
+        $len = strlen($text);
+        $i = $offset;
+        $emptytd = true;
+        $inEscape = 0;
+        $brInEscape = false;
+        $intd = true;
+        $rowIndex = 0;
+        $colIndex = 0;
+        $rowspan = 0;
+        $colspan = 0;
+
+        // caption 파싱은 처음에만
+        if(str_starts_with(substr($text,$i), '|') && !str_starts_with(substr($text,$i), '||') && $tableinit === true) {
+            $caption = explode('|', substr($text,$i));
+            if(count($caption) < 3)
+                return false;
+            $token['caption'] = $this->blockParser($caption[1]);
+            $hasCaption = true;
+            $tableinit = false;
+            //   (|)   (caption content)   (|)
+            $i += 1 + strlen($caption[1]) + 1;
+        }elseif(str_starts_with(substr($text,$i), "||||\n")){
+            array_push($token['rows'], []);
+            $i += 5;
+            $tableinit = false;
+            $hasCaption = false;
+        }elseif(str_starts_with(substr($text,$i), '||') && $tableinit === true){
+            $i += 2;
+            $hasCaption = false;
+            $tableinit = false;
+        }elseif($tableinit === true)
+            return false;
+
+        // text 변수에는 표 앞부분의 ||가 제외된 상태의 문자열이 있음
+        for($i; $i<$len; self::nextChar($text,$i)){
+            $now = self::getChar($text,$i);
+
+            //+ 백슬래시 문법
+            if($now == "\\" && $inEscape < 1 && !$brInEscape){
+                $emptytd = false;
+                $unloadedstr .= $now;
+                $unloadedstr .= self::nextChar($text, $i);
+                continue;
+            }elseif($inEscape < 1 && !$intd && str_starts_with(substr($text,$i), '##')){
+                $i = strpos($text,"\n",$i);
+                //continue;
+            }
+            
+            if(str_starts_with(substr($text,$i), '{{{') && strpos(substr($text, $i), '}}}') !== false){
+                // 삼중괄호 안 ||를 무효화 처리하기 위한 부분
+                $emptytd = false;
+                $brInEscape = false;
+                $unloadedstr .= '{{{';
+                $inEscape++;
+                $i += 2;
+                continue;
+            }elseif(str_starts_with(substr($text,$i), '}}}') && $inEscape > 0){
+                $unloadedstr .= '}}}';
+                $inEscape--;
+                $i += 2;
+                if($inEscape === 0)
+                    $brInEscape = false;
+                continue;
+            }elseif(str_starts_with(substr($text,$i), '||')) {
+                if($inEscape > 0){
+                    $unloadedstr .= '||';
+                    $i++;
+                    continue;
+                }
+                if($intd == true && $tdInnerStr == '' && $unloadedstr == '' && $emptytd){
+                    if($colspan > 0){
+                        ++$colspan;
+                    }else{
+                        $colspan = 2;
+                    }
+                    ++$i;
+                    continue;
+                }elseif($intd === true){
+                    //td end and new td start
+                    if(!isset($tdAttr['text-align'])){
+                        // 공백으로 정렬
+                        $start = (substr($unloadedstr, 0, 1) === ' ');
+                        $end = (substr($unloadedstr, -1, 1) === ' ');
+                        if($start && $end){
+                            $tdAttr['text-align'] = 'center';
+                            $unloadedstr = substr($unloadedstr, 1, strlen($unloadedstr) - 2);
+                        }elseif($start && !$end){
+                            $tdAttr['text-align'] = 'right';
+                            $unloadedstr = substr($unloadedstr, 1, strlen($unloadedstr) - 1);
+                        }elseif(!$start && $end){
+                            $tdAttr['text-align'] = 'left';
+                            $unloadedstr = substr($unloadedstr, 0, strlen($unloadedstr) - 1);
+                        }
+                    }
+                    
+                    $tdInnerStr .= $this->blockParser($unloadedstr);
+                    $unloadedstr = '';
+                    $token['rows'][$rowIndex]['cols'][$colIndex] = ['text' => $tdInnerStr, 'style' => $tdAttr];
+                    $tdAttr = [];
+                    if($rowspan > 0){
+                        $token['rows'][$rowIndex]['cols'][$colIndex]['rowspan'] = $rowspan;
+                        $rowspan = 0;
+                    }
+                    if($colspan > 0){
+                        $token['rows'][$rowIndex]['cols'][$colIndex]['colspan'] = $colspan;
+                        $colspan = 0;
+                    }
+                    $tdInnerStr = '';
+                    ++$colIndex;
+                    ++$i;
+                    $emptytd = true;
+                    continue;
+                }elseif($intd === false){
+                    // new td start
+                    $intd = true;
+                    $emptytd = true;
+                    ++$i;
+                    continue;
+                }
+                continue;
+            }elseif($tdInnerStr == '' && $unloadedstr == '' && str_starts_with(substr($text,$i), '<') && preg_match('/^((<(tablealign|table align|tablebordercolor|table bordercolor|tablecolor|table color|tablebgcolor|table bgcolor|tablewidth|table width|rowbgcolor|rowcolor|colbgcolor|colcolor|width|height|color|bgcolor)=[^>]+>|<(-[0-9]+|\|[0-9]+|\^\|[0-9]+|v\|[0-9]+|\:|\(|\)|(#?[0-9A-Za-z]+))>)+)/', strtolower(substr($text,$i, self::seekStr($text, "\n", $i) - $i)), $match) && (empty($match[5]) || self::chkColor($match[5]))){
+                $attrs = explode('><', substr($match[1], 1, strlen($match[1])-2));
+                $emptytd = false;
+                foreach ($attrs as $attr){
+                    $attr = strtolower($attr);
+                    if(preg_match('/^([^=]*)=([^=]*)$/', $attr, $tbattr)){
+                        $attrxs = str_replace(' ', '', $tbattr[1]);
+                        // 속성은 최초 설정치가 적용됨
+                        if(
+                            !in_array($attrxs, $tableattrinit) && (
+                                (in_array($tbattr[1], ['tablealign', 'table align']) && in_array($tbattr[2], ['center', 'left', 'right'])) ||
+                                (in_array($tbattr[1], ['tablewidth', 'table width']) && preg_match('/^-?[0-9.]*(px|%|)$/', $tbattr[2], $tbw)) || 
+                                (in_array($tbattr[1], ['tablebgcolor', 'table bgcolor', 'tablecolor', 'table color', 'tablebordercolor', 'table bordercolor']) &&
+                                self::chkColor($tbattr[2]))
+                            )
+                        ){
+                            // 표 속성
+                            $i += strlen($tbattr[0]) + 2;
+                            array_push($tableattrinit, $attrxs);
+                            switch($attrxs){
+                                case 'tablebgcolor':
+                                    $tbAttrNm = 'background-color';
+                                    break;
+                                case 'tablecolor':
+                                    $tbAttrNm = 'color';
+                                    break;
+                                //case 'tablebordercolor':
+                                //    $tbAttrNm = 'border-color';
+                                //    break;
+                                case 'tablebgcolor':
+                                    $tbAttrNm = 'background-color';
+                                    break;
+                                case 'tablewidth':
+                                    $tbAttrNm = 'width';
+                                    if($tbw[1] == '')
+                                        $tbattr[2] .= 'px';
+                                    break;
+                                default:
+                                    $tbAttrNm = $attrxs;
+                            }
+                            if($attrxs == 'tablealign' && ($tbattr[2] == 'center' || $tbattr[2] == 'right'))
+                                array_push($tableCls, 'table-'.$tbattr[2]);
+                            else
+                                $tableAttr[$tbAttrNm] = $tbattr[2];
+                        }elseif(
+                            // 개별 행 속성
+                            in_array($tbattr[1], ['rowbgcolor', 'rowcolor']) && 
+                            self::chkColor($tbattr[2])
+                        ){
+                            $i += strlen($tbattr[0]) + 2;
+                            switch($tbattr[1]){
+                                case 'rowbgcolor':
+                                    $tbAttrNm = 'background-color';
+                                    break;
+                                case 'rowcolor':
+                                    $tbAttrNm = 'color';
+                                    break;
+                                default:
+                                    $tbAttrNm = $tbattr[1];
+                            }
+                            $token['rows'][$rowIndex]['style'][$tbAttrNm] = $tbattr[2];
+                        }elseif(
+                            // 개별 열 속성
+                            in_array($tbattr[1], ['colbgcolor', 'colcolor']) && 
+                            self::chkColor($tbattr[2])
+                        ){
+                            $i += strlen($tbattr[0]) + 2;
+                            switch($tbattr[1]){
+                                case 'colbgcolor':
+                                    $tbAttrNm = 'background-color';
+                                    break;
+                                case 'colcolor':
+                                    $tbAttrNm = 'color';
+                                    break;
+                                default:
+                                    $tbAttrNm = $tbattr[1];
+                            }
+                            $token['colstyle'][$colIndex][$rowIndex][$tbAttrNm] = $tbattr[2];
+                            $tdAttr[$tbAttrNm] = $tbattr[2];
+                        }elseif(
+                            // 개별 셀 속성
+                            (in_array($tbattr[1], ['width', 'height']) && preg_match('/^-?[0-9.]*(px|%)?$/', $tbattr[2])) ||
+                            (in_array($tbattr[1], ['color', 'bgcolor']) && self::chkColor($tbattr[2]))
+                        ){
+                            $i += strlen($tbattr[0]) + 2;
+                            switch($tbattr[1]){
+                                case 'bgcolor':
+                                    $tbAttrNm = 'background-color';
+                                    break;
+                                default:
+                                    $tbAttrNm = $tbattr[1];
+                            }
+                            $tdAttr[$tbAttrNm] = $tbattr[2];
+                        }
+                    }elseif(preg_match('/^(-|\|)([0-9]+)$/', $attr, $tbspan)){ // 
+                        $i += strlen($tbspan[0]) + 2;
+                        // <|n>
+                        if($tbspan[1] == '-')
+                            $colspan = $tbspan[2];
+                        elseif($tbspan[1] == '|')
+                            $rowspan = $tbspan[2];
+                    }elseif(preg_match('/^(\^|v|)\|([0-9]+)$/', $attr, $tbalign)){ // 수직정렬 및 colspan
+                        $i += strlen($tbalign[0]) + 2;
+                        // <^|n>
+                        if($tbalign[1] == '^')
+                            $tdAttr['vertical-align'] = 'top';
+                        elseif($tbalign[1] == 'v')
+                            $tdAttr['vertical-align'] = 'bottom';
+                        
+                        $colspan = $tbalign[2];
+                    }elseif($attr == ':' || $attr == '(' || $attr == ')'){ // 수평정렬
+                        switch($attr){
+                            case ':':
+                                $tdAttr['text-align'] = 'center';
+                                $i += 3;
+                                break;
+                            case '(':
+                                $tdAttr['text-align'] = 'left';
+                                $i += 3;
+                                break;
+                            case ')':
+                                $tdAttr['text-align'] = 'right';
+                                $i += 3;
+                        }
+                    }else{
+                        $i += strlen($attr) + 2;
+                        $tdAttr['background-color'] = $attr;
+                    }
+                }
+                --$i;
+
+                // 정체불명의 무한루프 방지
+                if(isset($last_temp) && $last_temp === $i)
+                    ++$i;
+                $last_temp = $i;
+                continue;
+            }elseif(str_starts_with(substr($text,$i), "\n")){
+                if(!$this->firstlinebreak)
+                    $this->firstlinebreak = true;
+                
+                if(str_starts_with(substr($text,$i), "\n||") && ($unloadedstr == '' && $tdInnerStr == '') && $emptytd) {
+                    // 행갈이
+                    ++$rowIndex;
+                    $colIndex = 0;
+                    $intd = false;
+                }elseif(str_starts_with(substr($text,$i), "\n") && self::getChar($text,$i+1) !== '|' && !str_starts_with(substr($text,$i+1),'##') && 
+                    ($unloadedstr == '' && $tdInnerStr == '' && $emptytd) && 
+                    (($rowIndex !== 0 || $colIndex !== 0))
+                ) {
+                    // end of table
+                    ++$i;
+                    break;
+                }else //if(str_starts_with(substr($text,$i), "\n"))
+                {
+                    // just breaking line
+                    $unloadedstr .= $now;
+                }
+            }else{
+                // other string
+                $unloadedstr.=$now;
+                $emptytd = false;
+            }
+        }
+
+        $token['class'] = $tableCls;
+        $token['style'] = $tableAttr;
+        $offset = $i-1;
+        return $token;
+    }
+
+    //+ Rebuilt by PRASEOD-
+    private function listParser($text, &$offset): array|false
+    {
+        $len = strlen($text);
+        $list = [];
+        $linestart = true;
+        $emptyline = false;
+        $skipbreak = false;
+        $eol = false;
+        $listdata = ['type' => 'list', 'lists' => []];
+        $html = '';
+        $inEscape = 0;
+        ++$offset;
+        ++$this->ind_level;
+        
+        for($i=$offset; $i<$len; self::nextChar($text,$i)){
+            $now = self::getChar($text, $i);
+
+            if($eol && $now !== ' ' && $inEscape < 1){
+                $list['html'] = $this->blockParser($html, true);
+                $html = '';
+                array_push($listdata['lists'], $list);
+                $list = [];
+                break; // 리스트 끝
+            }elseif($eol){
+                // 현재 들여쓰기 칸만큼 스킵
+                //if(!$skipbreak)  리스트 개행 간격
+                $now = self::nextChar($text,$i);
+            }
+            
+            if(str_starts_with(substr($text,$i), '{{{') && strpos(substr($text,$i), '}}}') !== false){
+                $html .= '{{{';
+                $i += 2;
+                ++$inEscape;
+                continue;
+            }elseif(str_starts_with(substr($text,$i), '}}}') && $inEscape > 0){
+                $html .= '}}}';
+                $i += 2;
+                --$inEscape;
+                continue;
+            }elseif(
+                ($linestart && preg_match('/^((\*|1\.|a\.|A\.|I\.|i\.)(#[^ ]*)? ?)(.*)/', substr($text,$i), $match))
+            ){
+                // 리스트
+                if(!empty($html)){
+                    $list['html'] = $this->blockParser($html, ($listdata['listtype'] == 'wiki-indent'));
+                    $html = '';
+                    array_push($listdata['lists'], $list);
+                    $list = [];
+                }
+                $listdata['listtype'] = self::$list_tags[$match[2]];
+                if(!isset($listdata['start']))
+                    $listdata['start'] = substr($match[3], 1);
+                
+                if(!is_numeric($listdata['start']) || $listdata['start'] < 0) // #숫자 여부 + 음수 아님
+                    $listdata['start'] = 1;
+
+                $i += strlen($match[1]) - 1;
+
+                $emptyline = false;
+                if($eol)
+                    $eol = false;
+                if($linestart)
+                    $linestart = false;
+                continue;
+            }elseif($linestart && !$eol){ //  && !$this->fromblockquote
+                // 들여쓰기
+                $listdata['listtype'] = 'wiki-indent';
+            }elseif($eol){
+                $html .= "\n";
+                $eol = false;
+            }
+
+            if($linestart){
+                $linestart = false;
+            }
+            
+            if($now == "\n" && $inEscape < 1){
+                // 공백 처리
+                //if($emptyline)
+                //    $skipbreak = true;
+                //$emptyline = true;
+                $eol = true;
+                $linestart = true;
+                continue;
+            }
+
+            $html .= $now;
+            //$emptyline = false;
+        }
+
+        if(!empty($html)){
+            $list['html'] = $this->blockParser($html, ($listdata['listtype'] == 'wiki-indent'));
+            array_push($listdata['lists'], $list);
+            $list = [];
+        }
+
+        $offset = $i - 1;
+        --$this->ind_level;
+        unset($text);
+        if(empty($listdata['lists']))
+            return false;
+
+        //var_dump($listdata);    
+        return $listdata;
+    }
+
+    private function lineParser($line): array|false
+    {
+        $result = [];
+        $token = [];
+
+        //+ 공백 있어서 안 되는 오류 수정
+        if(str_starts_with($line, '##')) {
+            // 주석
+            $line = '';
+        }elseif(str_starts_with($line, '=') && preg_match('/^(=+) (.*?) (=+) *(\n)?$/', trim($line), $match) && $match[1]===$match[3]) {
+            // 문단
+            $level = strlen($match[1]);
+            $innertext = $match[2];
+
+            //+ 접힌문단 기능 추가
+            if (preg_match('/^# (.*) #$/', $innertext, $ftoc)) {
+                $folded = true;
+                $innertext = $ftoc[1];
+            }else{
+                $folded = false;
+            }
+
+            $id = $this->tocInsert($this->toc, $innertext, $level);
+            $token = ['type' => 'heading', 'level' => $level, 'section' => $id, 'folded' => $folded ];
+            
+
+            
+            if(preg_match('/\[anchor\((.*)\)\]/', $innertext, $anchor)){
+                $RealContent = str_replace($anchor[0], '', $innertext);
+                //$result .= '<a id="'.$anchor[1].'"></a><span id="'.trim($RealContent).'">'.$RealContent;
+            }else{
+                $RealContent = $innertext;
+                //$result .= '<span id="'.strip_tags($innertext).'">'.$innertext;
+            }
+
+            $token['id'] = $RealContent;
+            $token['text'] = $this->blockParser($innertext);
+            array_push($result, $token);
+            
+            $line = '';
+        }
+
+        //+ 수평줄 문제 개선
+        if(preg_match('/^[ ]*(-{4,9})$/', $line)){
+            array_push($result, ['type' => 'plaintext', 'text' => '<hr class="wiki-hr">']);
+            $line = '';
+        }
+
+        // 행에 뭐가 있을때
+        if($line != '') {
+            $line = $this->formatParser($line);
+            //if(!$this->linenotend)
+            //    array_push($result, ['type' => 'plaintext', 'text' => '<br>']); //+ {{{#!wiki}}} 문법 앞에서 개행되는 문제 수정
+            //else
+                $result = array_merge($result, $line);
+        }
+
+        unset($line, $token, $innertext);
+
+        return $result;
+    }
+
+    private function blockParser($block, $isWikiTextBox = false, $isBlockQuote = false): string|null
+    {
+        $defaultw = $this->wikitextbox;
+        $defaultb = $this->firstlinebreak;
+        $defaultq = $this->fromblockquote;
+        $defaultl = $this->linenotend;
+        $this->wikitextbox = true;
+        $this->linenotend = false;
+        $this->firstlinebreak = ($isWikiTextBox);
+        $this->fromblockquote = ($isBlockQuote);
+        $content = $this->toHtml($block);
+        $this->wikitextbox = $defaultw;
+        $this->linenotend = $defaultl;
+        $this->firstlinebreak = $defaultb;
+        $this->fromblockquote = $defaultq;
+
+        return $content;
+    }
+
+    private function bracketParser($text, &$now, $bracket): array|false
+    {
+        $len = strlen($text);
+        $cnt = 0;
+        $unloadedstr = '';
+        $loadedstr = [];
+        $openlen = strlen($bracket['open']);
+
+        if(!isset($bracket['strict']))
+            $bracket['strict'] = true;
+
+        // 한글자씩 스캔
+        for($i=$now+$openlen;$i<$len;self::nextChar($text,$i)) {
+            $char = self::getChar($text, $i);
+            //+ 백슬래시 문법 지원
+            /*if($char == "\\" && !$isEscape) {
+                // {{{ }}} 구문이 아닌 경우 \ 처리
+                ++$i;
+                $unloadedstr .= self::getChar($text, $i);
+                $char = '';
+                continue;
+            }else*/
+            if(str_starts_with(substr($text,$i), $bracket['open']) && $bracket['open'] !== $bracket['close']) {
+                // 중첩구간처리
+                $cnt++;
+                $i += strlen($bracket['open']) - 1;
+                $unloadedstr .= $bracket['open'];
+                continue;
+            }elseif(str_starts_with(substr($text,$i), $bracket['close']) && $cnt > 0){
+                $cnt--;
+                $i += strlen($bracket['close']) - 1;
+                $unloadedstr .= $bracket['close'];
+                continue;
+            }elseif(str_starts_with(substr($text,$i), $bracket['close']) && $cnt === 0) {
+                // 닫는괄호
+                if($bracket['strict'] && $bracket['multiline'] && strpos($unloadedstr, "\n")===false)
+                    return false;
+                
+                $argarray = [$unloadedstr];
+                if($bracket['processor'] == 'textProcessor')
+                    array_push($argarray, $bracket['open']);
+
+                $loadedstr = array_merge($loadedstr, call_user_func_array([$this, $bracket['processor']],$argarray));
+                $now = $i+strlen($bracket['close'])-1;
+                return $loadedstr;
+            }elseif(!$bracket['multiline'] && $char == "\n")
+                return false; // 개행금지 문법에서 개행 발견
+            elseif($char == "\n")
+                $this->firstlinebreak = true;
+            
+            $unloadedstr .= $char;
+        }
+        return false;
+    }
+
+    //+ 역슬래시 지원
+    private function formatParser($line): array|false
+    {
+        $line_len = strlen($line);
+        $result = [];
+        $inline = '';
+        for($j=0;$j<$line_len;self::nextChar($line,$j)) {
+            $now = self::getChar($line,$j);
+            if($now == "\\"){
+                ++$j;
+                $inline .= htmlspecialchars(self::getChar($line,$j));
+                continue;
+            }elseif($now == "\n"){
+                array_push($result, ['type' => 'plaintext', 'text' => $inline]);
+                array_push($result, ['type' => 'plaintext', 'text' => '<br>']);
+                $inline = '';
+                continue;
+            }else {
+                foreach(self::$brackets as $bracket) {
+                    $nj=$j;
+                    if(str_starts_with(substr($line,$j), $bracket['open']) && $bracket['multiline'] === false && $inner = $this->bracketParser($line, $nj, $bracket)) {
+                        array_push($result, ['type' => 'plaintext', 'text' => $inline]);
+                        $result = array_merge($result, $inner);
+                        $inline = '';
+                        $j = $nj;
+                        continue 2;
+                    }
+                }
+                $inline .= htmlspecialchars($now);
+            }
+
+            // 외부이미지
+            /*if(str_starts_with(substr($line,$j), 'http') && preg_match('/(https?:\/\/[^ ]+\.(jpg|jpeg|png|gif))(?:\?([^ ]+))?/i', $line, $match, 0, $j)) {
+                if($this->imageAsLink)
+                    $innerstr = '<span class="alternative">[<a class="external" target="_blank" href="'.$match[1].'">image</a>]</span>';
+                else {
+                    $paramtxt = '';
+                    $csstxt = '';
+                    if(!empty($match[3])) {
+                        preg_match_all('/[&?]?([^=]+)=([^\&]+)/', htmlspecialchars_decode($match[3]), $param, PREG_SET_ORDER);
+                        foreach($param as $pr) {
+                            // 이미지 크기속성
+                            switch($pr[1]) {
+                                case 'width':
+                                    if(preg_match('/^[0-9]+$/', $pr[2]))
+                                        $csstxt .= 'width: '.$pr[2].'px; ';
+                                    else
+                                        $csstxt .= 'width: '.$pr[2].'; ';
+                                    break;
+                                case 'height':
+                                    if(preg_match('/^[0-9]+$/', $pr[2]))
+                                        $csstxt .= 'height: '.$pr[2].'px; ';
+                                    else
+                                        $csstxt .= 'height: '.$pr[2].'; ';
+                                    break;
+                                case 'align':
+                                    if($pr[2]!='center')
+                                        $csstxt .= 'float: '.$pr[2].'; ';
+                                    break;
+                                default:
+                                    $paramtxt.=' '.$pr[1].'="'.$pr[2].'"';
+                            }
+                        }
+                    }
+                    $paramtxt .= ($csstxt!=''?' style="'.$csstxt.'"':'');
+                    $innerstr = '<img src="'.$match[1].'"'.$paramtxt.'>';
+                }
+                $line = substr($line, 0, $j).$innerstr.substr($line, $j+strlen($match[0]));
+                $line_len = strlen($line);
+                $j+=strlen($innerstr)-1;
+                continue;
+            }elseif(str_starts_with(substr($line,$j), 'attachment') && preg_match('/attachment:([^\/]*\/)?([^ ]+\.(?:jpg|jpeg|png|gif|svg))(?:\?([^ ]+))?/i', $line, $match, 0, $j) && $this->inThread !== false) {
+                // 파일
+                if($this->imageAsLink)
+                    $innerstr = '<span class="alternative">[<a class="external" target="_blank" href="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->NWPage->title).'__').$match[2].'">image</a>]</span>';
+                else {
+                    $paramtxt = '';
+                    $csstxt = '';
+                    if(!empty($match[3])) {
+                        preg_match_all('/([^=]+)=([^\&]+)/', $match[3], $param, PREG_SET_ORDER);
+                        foreach($param as $pr) {
+                            switch($pr[1]) {
+                                case 'width':
+                                    if(preg_match('/^[0-9]+$/', $pr[2]))
+                                        $csstxt .= 'width: '.$pr[2].'px; ';
+                                    else
+                                        $csstxt .= 'width: '.$pr[2].'; ';
+                                    break;
+                                case 'height':
+                                    if(preg_match('/^[0-9]+$/', $pr[2]))
+                                        $csstxt .= 'height: '.$pr[2].'px; ';
+                                    else
+                                        $csstxt .= 'height: '.$pr[2].'; ';
+                                    break;
+                                case 'align':
+                                    if($pr[2]!='center')
+                                        $csstxt .= 'float: '.$pr[2].'; ';
+                                    break;
+                                default:
+                                    $paramtxt.=' '.$pr[1].'="'.$pr[2].'"';
+                            }
+                        }
+                    }
+                    $paramtxt .= ($csstxt!=''?' style="'.$csstxt.'"':'');
+                    $innerstr = '<img src="https://attachment.namu.wiki/'.($match[1]?($match[1]=='' || substr($match[1], 0, -1)==''?'':substr($match[1], 0, -1).'__'):rawurlencode($this->NWPage->title).'__').$match[2].'"'.$paramtxt.'>';
+                }
+                $line = substr($line, 0, $j).$innerstr.substr($line, $j+strlen($match[0]));
+                $line_len = strlen($line);
+                $j+=strlen($innerstr)-1;
+                continue;
+            }*/ 
+        }
+        if(strlen($inline) > 0)
+            array_push($result, ['type' => 'plaintext', 'text' => $inline]);
+        
+        unset($line, $inline);
+        return $result;
+    }
+
+    private function renderProcessor($text): array
+    {
+        // + 대소문자 구분 반영
+        if(str_starts_with($text, '#!html')) {
+            if($this->inThread)
+                return [['type' => 'void']];
+            return [['type' => 'inline-html', 'text' => substr($text, 7)]];
+        } elseif(preg_match('/^#!wiki(.*)\n/', $text, $match)) {
+            // + {{{#!wiki }}} 문법
+            $divattr = '';
+            if(preg_match('/style=\".*\"/', $match[1], $_dattr))
+                $divattr = $_dattr[0];
+             
+            $text = substr($text, strlen($match[0]));
+            return [['type' => 'wikitext', 'attr' => $divattr, 'text' => $this->blockParser($text, true)]];
+        } elseif(preg_match('/^#!folding(.*)\n/', $text, $match)){
+            if(strlen($match[1]) < 1)
+                $str = 'More';
+            else
+                $str = $match[1];
+            
+            $text = substr($text, strlen($match[0]));
+            return [['type' => 'folding', 'text' => $str, 'html' => $this->blockParser($text, true)]];    
+        } elseif(preg_match('/^#!syntax ('.implode('|', self::$syntaxList).')/', $text, $match)) {
+            // 구문
+            return [['type' => 'syntax', 'lang' => $match[1], 'text' => substr($text, strlen($match[0]))]];
+        } elseif(preg_match('/^\+([1-5]) (.*)/', $text, $size)) {
+            // {{{+큰글씨}}}
+            return [['type' => 'wiki-size', 'size' => 'up-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
+        } elseif(preg_match('/^\-([1-5]) (.*)/', $text, $size)) {
+            // {{{-작은글씨}}}
+            return [['type' => 'wiki-size', 'size' => 'down-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
+        } elseif(preg_match('/^(#[A-Fa-f0-9]{3}|#[A-Fa-f0-9]{6}|#([A-Za-z]+)) (.*)/', $text, $color) && (self::chkColor($color[1]) || self::chkColor($color[2]))) {
+            //if(empty($color[1]))
+            //    return [['type' => 'plaintext', 'text' => $text]];
+            // 실제로는 작동하지 않는 영역으로 추정.
+            return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1]) + 1))]];
+        } else {
+            return [['type' => 'rawtext', 'text' => htmlspecialchars($text)]];
+            // 문법 이스케이프
+        }
+    }
+
+    //+ rebuilt by PRASEOD-
+    private function linkProcessor($text, &$rd=0): array
+    {
+        $target = null;
+        $locallink = false;
+        $display = null;
+        $inSharp = '';
+        $href = null;
+        $unloadedstr = '';
+        $classList = [];
+        $imgAttr = '';
+        $len = strlen($text);
+        $forcetext = false;
+        $exception = '';
+        /*
+        * img attr
+        align != center:
+            align> style="..."
+            wrapper> style="a:100"
+        align=center:
+            wrapper> style="..."
+
+        */
+
+        // 처리 순서: 문서명 > # > |
+        for($i=0; $i<$len; self::nextChar($text,$i)){
+            $now = self::getChar($text,$i);
+            if($i === 0 && $now == ':'):
+                $forcetext = true;
+                continue;
+            elseif($now == "\\"):
+                // escape
+                ++$i;
+                $unloadedstr .= self::getChar($text,$i);
+                continue;
+            elseif($now == '#' && $target === null):
+                if($i === 0):
+                    // #으로 시작
+                    $locallink = true;
+                    $target = $this->title;
+                elseif($target == null):
+                    // 문서명 뒤의 #
+                    $target = $unloadedstr;
+                    $unloadedstr = '';
+                endif;
+                $inSharp = '#';
+            elseif($now == '|'):
+                if($inSharp == '#'){
+                    $inSharp = $unloadedstr;
+                    $unloadedstr = '';
+                    continue;
+                }elseif($target === null){
+                    $target = $unloadedstr;
+                    $unloadedstr = '';
+                    continue;
+                }
+            endif;
+
+            $unloadedstr .= $now;
+        }
+
+        if($target === null && $inSharp == ''){
+            // normal link
+            $target = $display = $unloadedstr;
+            $unloadedstr = '';
+        }elseif($inSharp == '#' && $unloadedstr[0] == '#'){
+            // link ended with #-string
+            $inSharp = $unloadedstr;
+            $unloadedstr = '';
+            if($locallink)
+                $display = $inSharp;
+            else
+                $display = $target;
+        }
+
+        if(strpos($target, '파일:') === 0){
+            // 파일 삽입
+            $imgAlign = 'normal';
+            $changed = '';
+            $preserved = '';
+            $wrapTag = '';
+            $bgcolor = '';
+            if(strlen($unloadedstr) > 0){
+                $options = explode('&', $unloadedstr);
+                foreach($options as $option){
+                    $opt = explode('=', $option);
+
+                    // this is not option string
+                    if(count($opt) < 2)
+                        continue;
+
+                    if(($opt[0] == 'height' || $opt[0] == 'width') && preg_match('/%$/', $opt[1]))
+                        $opt[1] = intval($opt[1]).'%';
+                    else
+                        $opt[1] = intval($opt[1]).'px';
+
+                    switch($opt[0]){
+                        case 'width':
+                            if(!preg_match('/^[0-9]/', $opt[1]))
+                                continue;
+                            $changed .= 'width: '.$opt[1].';';
+                            $preserved .= 'width: 100%;';
+                            $wrapTag .= ' width="100%"';
+                            break;
+                        case 'height':
+                            if(!preg_match('/^[0-9]/', $opt[1]))
+                                continue;
+                            $changed .= 'height: '.$opt[1].';';
+                            $preserved .= 'height: 100%;';
+                            $wrapTag .= ' height="100%"';
+                            break;
+                        case 'align':
+                            if(!in_array($opt[1], ['left', 'center', 'right','middle','bottom','top']))
+                                continue;
+                            $imgAlign = $opt[1];
+                            break;
+                        case 'bgcolor':
+                            if(!self::chkColor($opt[1]))
+                                continue;
+                            $bgcolor .= 'background-color:'.$opt[1].';';
+                            break;
+                        case 'theme':
+                            if($opt[1] !== 'dark' && $opt[1] !== 'light')
+                                continue;
+                        case 'border-radius':
+                        case 'rendering':
+                            if($opt[1] !== 'pixelated')
+                                continue;
+                        case 'object-fit':
+                            if(!in_array($opt[1], ['fill', 'contain', 'cover','none','scale-down']))
+                                continue;
+                        default:
+                            continue;
+                    }
+                }
+            }
+            
+            if($imgAlign == 'center'){
+                $attr_align = '';
+                $attr_wrapper = ' style="'.$imgAttr.$bgcolor.'"';
+            }else{
+                $attr_align = ' style="'.$changed.'"';
+                $attr_wrapper = ' style="'.$preserved.$bgcolor.'"';
+            }
+
+            $fileName = substr($target, strlen('파일:'));
+            if(strpos($fileName, '.') !== false){
+                $fnexp = explode('.', $fileName);
+                $fnWithoutExt = implode('.', array_slice($fnexp, 0, count($fnexp) - 1));
+            }else{
+                $fnWithoutExt = $fileName;
+            }
+            
+            $href = '/file/'.hash('sha256', $fileName);
+            if($rd === 0) array_push($this->links['file'], $target);
+            
+            if($rd !== 0) $rd = ['target' => $target, 'class' => $classList];
+
+            return [['type' => 'link', 'linktype' => 'file', 'class' => ['wiki-link-internal'], 'href' => $href, 'text' => $target, 'imgalign' => $imgAlign, 'attralign' => $attr_align, 'attrwrapper' => $attr_wrapper, 'wraptag' => $wrapTag, 'fnwithouttext' => $fnWithoutExt]];
+        }elseif(strpos($target, '분류:') === 0){
+            // 분류 삽입
+            array_push($this->category, substr($target, strlen('분류:')));
+            if($rd !== 0) $rd = ['target' => $text, 'class' => $classList];
+            return [['type' => 'void']];
+        }elseif($display === null){
+            // 별도 렌더링(|가 있는 링크)
+            $display = $this->blockParser($unloadedstr);
+            
+            $unloadedstr = '';
+        }
+
+        if(preg_match('@^https?://([^\.]+\.)+[^\.]{2,}$@', $target, $domain)){
+            // URL
+            $href = $target;
+            array_push($classList, 'wiki-link-external');
+        }else{
+            // ../와 /로 시작하는 것은 이스케이프 문자열을 무시함.
+            if(strpos($target, '../') === 0){
+                if(strlen($target) > 3)
+                    $restpart = substr($target, 2);
+                else
+                    $restpart = '';
+                $exptar = explode('/', $this->title);
+                if(count($exptar) > 1)
+                    $target = implode('/', array_slice($exptar, 0, count($exptar) - 1)).$restpart;
+                else
+                    $target = $this->title;
+            }elseif(strpos($target, '/') === 0)
+                $target = $this->title.$target;
+            elseif(strpos($target, ':파일:') === 0 || strpos($target, ':분류:') === 0){
+                $target = substr($target, strpos($target, ':분류:') + 1);
+                
+                //$display = $target;
+            }
+
+            if($target == $this->title && !$locallink)
+                array_push($classList, 'wiki-self-link');
+            elseif($rd === 0){
+                array_push($this->links['link'], $target);
+                array_push($classList, 'wiki-link-internal');
+            }
+
+            if($locallink)
+                $href = $inSharp;
+            elseif($href === null)
+                $href = '/w/'.$target.$inSharp;
+        }
+
+        if(in_array('wiki-link-internal', $classList) && !self::pageExists($target))
+            array_push($classList, 'not-exist');
+        
+        if($rd !== 0) $rd = ['target' => $target, 'class' => $classList];
+        return [['type' => 'link', 'linktype' => 'general', 'class' => $classList, 'target' => $target, 'href' => $href, 'text' => $display]];
+    }
+
+    // 대괄호 문법
+    private function macroProcessor($text): array
+    {
+        $macroName = strtolower($text);
+        if(!empty($this->macro_processors[$macroName]))
+            return $this->macro_processors[$macroName]();
+        
+        switch($macroName) {
+            case 'br':
+                return [['type' => 'plaintext', 'text' => '<br>']];
+            case 'date':
+            case 'datetime':
+                return [['type' => 'plaintext', 'text' => date('Y-m-d H:i:sO')]];
+            case '목차':
+            case 'tableofcontents':
+                return [['type' => 'toc']];
+            case '각주':
+            case 'footnote':
+                $from = $this->lastfncount;
+                $this->lastfncount = $this->fn_cnt;
+                array_push($this->fnset, $this->fn_names);
+                $this->fn_names = [];
+                return [['type' => 'footnotes', 'from' => $from, 'until' => $this->fn_cnt]];
+            case 'clearfix':
+                //+ clearfix
+                return [['type' => 'plaintext', 'text' => '<div style="clear:both;"></div>']];
+            case 'pagecount':
+                return [['type' => 'plaintext', 'text' => $this->totalPageCount]];
+            default:
+                if(preg_match('/^include\((.*)\)$/i', $text, $include) && $include = $include[1]) {
+                    if($this->included || $this->inThread)
+                        return [['type' => 'void']];
+
+                    $include = explode(',', $include);
+                    array_push($this->links['include'], $include[0]);
+                    /*if(($page = $this->NWPage->getPage($include[0])) && !empty($page->text)) {
+                        foreach($include as $var) {
+                            $var = explode('=', ltrim($var));
+                            if(empty($var[1]))
+                                $var[1]='';
+                            $page->text = str_replace('@'.$var[0].'@', $var[1], $page->text);
+                            // 틀 변수
+                        }
+                        $child = new NamuMark($page);
+                        $child->imageAsLink = $this->imageAsLink;
+                        $child->included = true;
+                        return $child->toHtml();
+                    }*/
+                    return [['type' => 'wikitext', 'attr' => '', 'text' => '']];
+                }
+                elseif(preg_match('/^(youtube|nicovideo|kakaotv|vimeo|navertv)\((.*)\)$/i', $text, $include)) {
+                    if($this->inThread)
+                        return [['type' => 'void']];
+                    elseif($include[1] == 'nicovideo' && !preg_match('/(sm)?([0-9]+)?/', $include[2], $m)){
+                        if(empty($m[2]))
+                            return [['type' => 'void']];
+                        elseif(empty($m[2]))
+                            $include[2] = 'sm'.$include[2];
+                    }
+                    
+                    $components = explode(',', $include[2]);
+                    $var = array();
+                    $urlvararr = [];
+                    foreach($components as $v) {
+                        $v = explode('=', $v);
+                        if(empty($v[1]))
+                            $v[1]='';
+                        $var[$v[0]] = $v[1];
+
+                        if($include[1] == 'youtube' && ($v[0] == 'start' || $v[0] == 'end'))
+                            array_push($urlvararr, implode('=',$v));
+                    }
+
+                    return [['type' => 'video', 
+                    'width' => (!empty($var['width'])?$var['width']:'640'), 
+                    'height' => (!empty($var['height'])?$var['height']:'360'), 
+                    'src' => self::$videoURL[$include[1]].$components[0].(!empty($urlvararr)?'?'.implode('&', $urlvararr):'')], ];
+                    
+                }
+                elseif(preg_match('/^age\((.*)\)$/i', $text, $include)) {
+                    $invalid = false;
+                    if($this->inThread)
+                        return [['type' => 'void']];
+
+                    if(count(explode('-', $include[1])) !== 3)
+                        $invalid = true;
+                    
+                    if(!preg_match('/([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])/', $include[1], $match) || strtotime(date("Y-m-d", time())) - strtotime($include[1]) <= 0)
+                        $invalid = true;
+
+                    if($invalid)
+                        return [['type' => 'plaintext', 'text' => 'invalid date']];
+                    
+                    list($dump, $year, $month, $day) = $match;
+
+                    if($year < 100)
+                        $year += 1900;
+
+                    $age = (date("md", date("U", mktime(0, 0, 0, $day, $month, $year))) > date("md")
+                        ? ((date("Y") - $year) - 1)
+                        : (date("Y") - $year));
+                    return [['type' => 'plaintext', 'text' => $age]];
+                }
+                elseif(preg_match('/^anchor\((.*)\)$/i', $text, $include) && $include = $include[1]) {
+                    return [['type' => 'anchor', 'text' => $include]];
+                }
+                elseif(preg_match('/^dday\((.*)\)$/i', $text, $include) && $include = $include[1]) {
+                    $invalid = false;
+                    if($this->inThread)
+                        return [['type' => 'void']];
+                    
+                    $nDate = date("Y-m-d");
+
+                    if(!preg_match('/([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])/', $include, $match))
+                        $invalid = true;
+
+                    if($invalid)
+                        return [['type' => 'plaintext', 'text' => 'invalid dday']];
+                        
+                    list($dump, $year, $month, $day) = $match;
+
+                    if($year < 100)
+                        $year += 1900;
+
+                    if(strtotime($nDate)==strtotime($include))
+                        $return = " 0";
+                    else
+                        $return = (strtotime($nDate)-strtotime($include)) / 86400;
+                    return [['type' => 'plaintext', 'text' => $return]];
+                }
+                elseif(preg_match('/^ruby\((.*)\)$/i', $text, $include)) {
+                    if($this->inThread)
+                        return [['type' => 'void']];
+
+                    $ruby = explode(',', $include[1]);
+                    foreach(array_slice($ruby, 1) as $a){
+                        $split = explode('=', $a);
+                        if($split[0] == 'ruby'){
+                            $rb = $split[1];
+                        }elseif($split[0] == 'color' && self::chkColor($split[1])){
+                            $color = $split[1];
+                        }
+                    }
+                    
+                    if(strlen($rb) > 0 && strlen($ruby[0]) > 0)
+                        return [['type' => 'ruby', 'ruby' => $rb, 'text' => $ruby[0], 'color' => $color]];
+                    else
+                        return [['type' => 'void']];
+                }
+                elseif(preg_match('/^pagecount\((.*)\)$/i', $text, $include) && $include = $include[1]) {
+                    if($this->inThread)
+                        return [['type' => 'void']];
+
+                    if(isset($this->pageCount[$include]))
+                        return [['type' => 'plaintext', 'text' => $this->pageCount[$include]]];
+                    else
+                        return [['type' => 'plaintext', 'text' => $this->totalPageCount]];
+                }
+                /* elseif(preg_match('/^math\((.*)\)$/i', $text, $include) && $include = $include[1]) {
+                    if($this->inThread)
+                        return [['type' => 'void']];
+
+                    return [['type' => 'math', 'text' => $include]];
+                } */
+                elseif(preg_match('/^\*([^ ]*)([ ].+)?$/', $text, $note)) {
+                    ++$this->fn_cnt;
+                    $notetext = !empty($note[2])?$this->blockParser($note[2]):'';
+                    if(strlen($note[1]) > 0){
+                        $name = strval($note[1]);
+                        if(!isset($this->fn_names[$name]))
+                            $this->fn_names[$name] = [];
+                        array_push($this->fn_names[$name], $this->fn_cnt);
+                    }else
+                        $name = $this->fn_cnt;
+                    
+                    if(isset($this->fn_names[$name]) && $this->fn_names[$name][0] == $this->fn_cnt || $name === $this->fn_cnt)
+                        $this->fn[$this->fn_cnt] = $notetext;
+                        
+                    array_push($this->fn_overview, $name);
+
+                    return [['type' => 'footnote', 'name' => htmlspecialchars($name), 'id' => $this->fn_cnt]];
+                }
+        }
+        return [['type' => 'plaintext', 'text' => '['.htmlspecialchars($text).']']];
+    }
+    
+    private function textProcessor($otext, $type): array
+    {
+        if($type !== '{{{'){
+            $text = $this->formatParser($otext);
+        }else{
+            $text = $otext;
+        }
+        $tagnameset = [
+            "'''" => 'strong',
+            "''" => 'em',
+            '--' => 'del',
+            '~~' => 'del',
+            '__' => 'u',
+            '^^' => 'sup',
+            ',,' => 'sub'
+        ];
+        switch ($type) {
+            case "'''":
+                // 볼드체
+            case "''":
+                // 기울임꼴
+            case '--':
+            case '~~':
+                // 취소선
+                // + 수평선 적용 안 되는 오류 수정
+            case '__':
+                // 목차 / 밑줄
+            case '^^':
+                // 위첨자
+            case ',,':
+                // 아래첨자
+                return array_merge([['type' => 'text-start', 'effect' => $tagnameset[$type]]], $text, [['type' => 'text-end', 'effect' => $tagnameset[$type]]]);
+            case '{{{':
+                // 개행 없어도 적용되는 삼중괄호 문법
+                if(str_starts_with($text, '#!html')) {
+                    if($this->inThread)
+                        return [['type' => 'void']];
+                    return [['type' => 'inline-html', 'text' => substr($text, 7)]];
+                } elseif(preg_match('/^\+([1-5]) (.*)/', $text, $size))
+                    return [['type' => 'wiki-size', 'size' => 'up-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
+                elseif(preg_match('/^\-([1-5]) (.*)/', $text, $size))
+                    return [['type' => 'wiki-size', 'size' => 'down-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
+                elseif(preg_match('/^(#[A-Fa-f0-9]{3}|#[A-Fa-f0-9]{6}|#([A-Za-z]+)) (.*)/', $text, $color) && (self::chkColor($color[1]) || self::chkColor($color[2]))) {
+                    //if(empty($color[1]) && empty($color[2]))
+                    //    return [['type' => 'plaintext', 'text' => $text]];
+                    return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1]) + 1))]];
+                }else // 문법 이스케이프
+                    return [['type' => 'escape', 'text' => htmlspecialchars($text)]];
+            }
+            return [['type' => 'plaintext', 'text' => $type.$text.$type]];
+    }
+
+    // 목차 삽입
+    private function tocInsert(&$arr, $text, $level, $path = ''): string
+    {
+        if(empty($arr[0])) {
+            $arr[0] = array('name' => $text, 'level' => $level, 'childNodes' => array());
+            return $path.'1';
+        }
+        $last = count($arr)-1;
+        $readableId = $last+1;
+        if($arr[0]['level'] >= $level) {
+            $arr[] = array('name' => $text, 'level' => $level, 'childNodes' => array());
+            return $path.($readableId+1);
+        }
+
+        return $this->tocInsert($arr[$last]['childNodes'], $text, $level, $path.$readableId.'.');
+    }
+
+    private static function getChar($string, int $pointer): false|string
+    {
+        if(!isset($string[$pointer]))
+            return false;
+        $char = ord($string[$pointer]);
+        if($char < 128){
+            return $string[$pointer];
+        }else{
+            if($char < 224){
+                $bytes = 2;
+            }elseif($char < 240){
+                $bytes = 3;
+            }elseif($char < 248){
+                $bytes = 4;
+            }elseif($char == 252){
+                $bytes = 5;
+            }else{
+                $bytes = 6;
+            }
+            $str = substr($string, $pointer, $bytes);
+            return $str;
+        }
+    }
+
+    private static function nextChar($string, int &$pointer): false|string
+    {
+        if(!isset($string[$pointer]))
+            return false;
+        $pointer += strlen(self::getChar($string,$pointer));
+        return self::getChar($string, $pointer);
+    }
+
+    private static function seekStr($text, $str, $offset=0): int|false
+    {
+        if($offset >= strlen($text) || $offset < 0)
+            return strlen($text);
+        return ($r=strpos($text, $str, $offset))===false?strlen($text):$r;
+    }
+
+    private static function jumpStr($string, int &$pointer)
+    {
+        if(!isset($string[$pointer]))
+            return false;
+        $target_point = ['pos' => null, 'char' => null];
+        
+        foreach(static::$renderpoint as $target){
+            $pos = strpos($string, $target, $pointer);
+            if($target_point['pos'] > $pos || $target_point['pos'] === null)
+                $target_point = ['pos' => $pos, 'char' => $target];
+        }
+        $pointer = $target_point['pos'];
+    }
+
+    private static function chkColor(string $color, $sharp = '#'): bool
+    {
+        if(preg_match('/^'.$sharp.'([0-9a-fA-F]{3}|[0-9a-fA-F]{6})/', $color))
+            return true;
+        elseif(in_array($color, self::$cssColors))
+            return true;
+        else
+            return false;
+    }
 }
