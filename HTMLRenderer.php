@@ -1,5 +1,5 @@
 <?php
-namespace PressDo;
+namespace PressDo\app\Helpers\Mark;
 /**
  * HTML Render for Tokenized Namumark
  * @author PRASEOD-
@@ -14,8 +14,8 @@ class HTMLRenderer
     public function render($token)
     {
         $result = '';
-        foreach($token as $t){
-            switch($t['type']){
+        foreach ($token as $t) {
+            switch ($t['type']) {
                 
                 case 'void':
                     break;
@@ -100,7 +100,7 @@ class HTMLRenderer
                     $result .= '<ruby>'.$t['text'].'<rp>(</rp><rt>'.$rb.'</rt><rp>)</rp></ruby>';
                     break;
                 case 'link':
-                    if($t['linktype'] == 'file'){
+                    if ($t['linktype'] == 'file') {
                         /*if(in_array('not-exist', $t['class']))
                             $result .= '<a class="wiki-link-internal not-exist" href="'.$t['href'].'">'.$t['href'].'</a>';
                         else{
@@ -111,7 +111,15 @@ class HTMLRenderer
                             .' src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTE3OCIgaGVpZ2h0PSIxMTc4IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg==">'
                             .'<img class="wiki-image" '.$t['wraptag'].'src="'.$t['href'].'" alt="'.$t['fnwithouttext'].'" loading="lazy"></span></span></a>';
                         }*/
-                    }else{
+                    } elseif ($t['linktype'] == 'redirect') {
+                        if(count($t['class']) > 0)
+                            $classStr = implode(' ', $t['class']);
+                        else
+                            $classStr = '';
+    
+                        $result .= '#redirect <a class="'.$classStr.'" href="'.$t['href'].'" title="'
+                                .$t['target'].'">'.$t['target'].'</a>';
+                    } else {
                         if(count($t['class']) > 0)
                             $classStr = implode(' ', $t['class']);
                         else
