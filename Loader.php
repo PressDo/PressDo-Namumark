@@ -11,7 +11,7 @@ class Loader
         $wEngine->prefix = "";
         $wEngine->title = $options['title'];
         $wEngine->inThread = $options['thread'];
-        $wEngine->db = $options['db'];
+        $wEngine->db = true;
         
         $content = str_replace("\r\n", "\n", $content);
         $wHtml = $wEngine->toHtml($content);

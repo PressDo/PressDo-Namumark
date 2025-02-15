@@ -65,7 +65,7 @@ class Namumark
     /**
      * Database 객체. false인 경우 DB 기능을 사용하지 않음.
      */
-    public $db = false;
+    public bool $db = false;
     
     public $intable, $firstlinebreak = false, $fromblockquote = false;
     private $NWPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
@@ -1398,7 +1398,7 @@ class Namumark
             $display = $this->blockParser($unloadedstr);
             
             $unloadedstr = '';
-        } else {
+        } elseif ($text[0] == ':') {
             // : is not for escape
             $target = ':'.$target;
         }
