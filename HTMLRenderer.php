@@ -1,22 +1,18 @@
 <?php
 namespace PressDo\app\Helpers\Mark;
-/**
- * HTML Render for Tokenized Namumark
- * @author PRASEOD-
- */
 class HTMLRenderer
 {
-    public $title, $toc = [], $fn_overview = [], $fn = [], $fnset = [];
+    public $title, $toc = [], $fn_overview = [], $fn = [], $fnset = [], $darkstyleset = [];
 
     public function __construct()
     {}
 
     public function render($token)
     {
+        $stylesheet = '';
         $result = '';
         foreach ($token as $t) {
             switch ($t['type']) {
-                
                 case 'void':
                     break;
                 case 'math':
@@ -34,14 +30,20 @@ class HTMLRenderer
                 case 'wiki-size':
                     $result .= '<span class="wiki-size size-'.$t['size'].'">'.$t['text'].'</span>';
                     break;
+                case 'escape':
+                    $result .= '<code>'.$t['text'].'</code>';
+                    break;
+                case 'clear':
+                    $result .= '<div style="clear:both;"></div>';
+                    break;
                 case 'rawtext':
                     $result .= '<pre>'.$t['text'].'</pre>';
                     break;
-                case 'escape':
-                    $result .= '<code class="wiki-escape">'.$t['text'].'</code>';
-                    break;
                 case 'plaintext':
                     $result .= $t['text'];
+                    break;
+                case 'horizontal-line':
+                    $result .= '<hr>';
                     break;
                 case 'text-start':
                     $result .= '<'.$t['effect'].'>';
@@ -50,7 +52,12 @@ class HTMLRenderer
                     $result .= '</'.$t['effect'].'>';
                     break;
                 case 'colortext':
-                    $result .= '<span style="color: '.$t['color'].'">'.$t['text'].'</span>';
+                    if (!empty($t['dark-color'])) {
+                        $ctDarkClassNm = '_'.self::rand(31);
+                        $ctDarkStyle = 'color: '.$t['dark-color'].'!important;';
+                        $this->darkstyleset[$ctDarkClassNm] = $ctDarkStyle;
+                    }
+                    $result .= '<span class="'.($ctDarkClassNm ?? '').'" style="color: '.$t['color'].';">'.$t['text'].'</span>';
                     break;
                 case 'anchor':
                     $result .= '<a id="'.$t['text'].'"></a>';
@@ -67,9 +74,9 @@ class HTMLRenderer
                 case 'heading':
                     $result .= '</div>
                             <h'.$t['level'].' class="wiki-heading" '.$t['folded'].'>'
-                            .  '<a id="s-'.$t['section'].'" href="#toc">'.$t['section'].'.</a><span id="'.strip_tags($t['id']).'">'.$t['text'].'</span>'
-                            .  '<span class="wiki-edit-section"><a href="/edit/'.$this->title.'?section='.$t['section'].'" rel="nofollow">[편집]</a></span>
-                            </span>
+                            .  '<a id="s-'.$t['section'].'" href="#toc">'.$t['section'].'.</a> <span id="'.strip_tags($t['id']).'">'.$t['text']
+                            .  '<span class="wiki-edit-section"><a href="/edit/'.$this->title.'?section='.$t['section'].'" rel="nofollow">[편집]</a></span>'
+                            .'</span></span>
                         </h'.$t['level'].'><div id="content-s-'.$t['section'].'" class="wiki-heading-content" fold="'.$t['folded'].'">';
                     break;
                 case 'folding':
@@ -78,9 +85,6 @@ class HTMLRenderer
                     break;
                 case 'footnotes':
                     $result .= $this->printFootnote($t['from'], $t['until']);
-                    break;
-                case 'categories':
-                    $result .= $this->printCategories();
                     break;
                 case 'list':
                     $result .= $this->printList($t);
@@ -133,7 +137,12 @@ class HTMLRenderer
             }
         }
 
-        return $result;
+        foreach ($this->darkstyleset as $cls => $sty) {
+            $stylesheet .= '.'.$cls.' {'.$sty.'} ';
+        }
+        $this->darkstyleset = [];
+
+        return !empty($stylesheet) ? '<style type="text/css"> .pressdo-dark-mode {'.$stylesheet.'}</style>'.$result : $result;
     }
 
     private function printList($listdata)
@@ -163,7 +172,9 @@ class HTMLRenderer
     private function printTable($token)
     {
         $tdAttrStr = $trInnerStr = $tdAttrStr = $trAttrStr = $tableInnerStr = $tableAttrStr = '';
+        $tdDarkAttrStr = $tdDarkAttrStr = $trDarkAttrStr = $tableDarkAttrStr = '';
         $tableAttr = $token['style'];
+        $tableDarkAttr = $token['dark-style'];
 
         if(!empty($token['colstyle'])){
             foreach($token['colstyle'] as $cci => $cs){
@@ -175,6 +186,38 @@ class HTMLRenderer
                                 $token['rows'][$j]['cols'][$cci]['style'] = $ccs;
                             else
                                 $token['rows'][$j]['cols'][$cci]['style'] = array_merge($ccs, $token['rows'][$j]['cols'][$cci]['style']);
+                        }
+                    }
+                }
+            }
+        }
+
+        if(!empty($token['coldarkstyle'])){
+            foreach($token['coldarkstyle'] as $cci => $cs){
+                foreach($cs as $ccr => $ccs){
+                    $rcnt = count($token['rows']);
+                    for($j=$ccr; $j<$rcnt; $j++){
+                        if(isset($token['rows'][$j]['cols'][$cci])){
+                            if(!isset($token['rows'][$j]['cols'][$cci]['dark-style']))
+                                $token['rows'][$j]['cols'][$cci]['dark-style'] = $ccs;
+                            else
+                                $token['rows'][$j]['cols'][$cci]['dark-style'] = array_merge($ccs, $token['rows'][$j]['cols'][$cci]['dark-style']);
+                        }
+                    }
+                }
+            }
+        }
+
+        if(!empty($token['colclass'])){
+            foreach($token['colclass'] as $cci => $cs){
+                foreach($cs as $ccr => $ccs){
+                    $rcnt = count($token['rows']);
+                    for($j=$ccr; $j<$rcnt; $j++){
+                        if(isset($token['rows'][$j]['cols'][$cci])){
+                            if(!isset($token['rows'][$j]['cols'][$cci]['class']))
+                                $token['rows'][$j]['cols'][$cci]['class'] = $ccs;
+                            else
+                                $token['rows'][$j]['cols'][$cci]['class'] = array_merge($ccs, $token['rows'][$j]['cols'][$cci]['class']);
                         }
                     }
                 }
@@ -201,14 +244,34 @@ class HTMLRenderer
                             $tdAttrStr .= $rcKeys[$k].':'.$rc['style'][$rcKeys[$k]].';';
                         }
                     }
-                        if(strlen($tdAttrStr) > 0)
-                            $tdAttrStr = ' style="'.$tdAttrStr.'"';
-                        if(isset($rc['rowspan']))
-                            $tdAttrStr .= ' rowspan="'.$rc['rowspan'].'"';
-                        if(isset($rc['colspan']))
-                            $tdAttrStr .= ' colspan="'.$rc['colspan'].'"';
-                        $trInnerStr .= '<td'.$tdAttrStr.'>'.$rc['text'].'</td>';
-                        $tdAttrStr = '';
+                    if(!empty($rc['dark-style'])){
+                        $rcCount = count($rc['dark-style']);
+                        $rcKeys = array_keys($rc['dark-style']);
+                        for($k=0; $k<$rcCount; ++$k){
+                            if($k !== 0)
+                            $tdDarkAttrStr .= ' ';
+                            $tdDarkAttrStr .= $rcKeys[$k].':'.$rc['dark-style'][$rcKeys[$k]].'!important;';
+                        }
+                    }
+
+                    if(strlen($tdAttrStr) > 0)
+                        $tdAttrStr = ' style="'.$tdAttrStr.'"';
+
+                    if(strlen($tdDarkAttrStr) > 0) {
+                        $tdClassNm = '_'.self::rand(31);
+                        $this->darkstyleset[$tdClassNm] = $tdDarkAttrStr;
+                        array_push($rc['class'], $tdClassNm);
+                    }
+                    
+                    if(isset($rc['rowspan']))
+                        $tdAttrStr .= ' rowspan="'.$rc['rowspan'].'"';
+
+                    if(isset($rc['colspan']))
+                        $tdAttrStr .= ' colspan="'.$rc['colspan'].'"';
+
+                    $trInnerStr .= '<td'.(!empty($rc['class']) ? ' class="'.implode(' ', $rc['class']).'"' : '').$tdAttrStr.'>'.$rc['text'].'</td>';
+                    $tdAttrStr = '';
+                    $tdDarkAttrStr = '';
                 }
 
             }
@@ -219,33 +282,62 @@ class HTMLRenderer
                     $trAttrStr .= $attkeys[$k].':'.$r['style'][$attkeys[$k]].'; ';
                 }
             }
+
+            if(!empty($r['dark-style'])){
+                $attrlen = count($r['dark-style']);
+                $attkeys = array_keys($r['dark-style']);
+                for($k=0; $k<$attrlen; ++$k){
+                    $trDarkAttrStr .= $attkeys[$k].':'.$r['dark-style'][$attkeys[$k]].'!important; ';
+                }
+            }
+
             if(strlen($trAttrStr) > 0)
                 $trAttrStr = ' style="'.$trAttrStr.'"';
+
+            if(strlen($trDarkAttrStr) > 0) {
+                $trClassNm = '_'.self::rand(31);
+                $this->darkstyleset[$trClassNm] = $trDarkAttrStr;
+                if (!is_array($r['class']))
+                    $r['class'] = [];
+                array_push($r['class'], $trClassNm);
+            }
             
-            $tableInnerStr .= '<tr'.$trAttrStr.'>'.$trInnerStr.'</tr>';
-            $trInnerStr = $trAttrStr = '';
+            $tableInnerStr .= '<tr'.(!empty($r['class']) ? ' class="'.implode(' ', $r['class']).'"' : '').$trAttrStr.'>'.$trInnerStr.'</tr>';
+            $trInnerStr = $trAttrStr = $trDarkAttrStr = '';
         }
         
         $attrlen = count($tableAttr);
         $attkeys = array_keys($tableAttr);
         for($k=0; $k<$attrlen; ++$k){
-            if($attkeys[$k] == 'tablebordercolor')
+            if($attkeys[$k] == 'border-color')
                 $tableAttrStr .= 'border: 2px solid '.$tableAttr[$attkeys[$k]].';';
             else
                 $tableAttrStr .= $attkeys[$k].':'.$tableAttr[$attkeys[$k]].'; ';
         }
+
+        $dattrlen = count($tableDarkAttr);
+        $dattkeys = array_keys($tableDarkAttr);
+        for($k=0; $k<$dattrlen; ++$k){
+            if($dattkeys[$k] == 'border-color')
+                $tableDarkAttrStr .= 'border: 2px solid '.$tableDarkAttr[$dattkeys[$k]].'!important;';
+            else
+                $tableDarkAttrStr .= $dattkeys[$k].':'.$tableDarkAttr[$dattkeys[$k]].'!important; ';
+        }
+
         if(strlen($tableAttrStr) > 0)
             $tableAttrStr = ' style="'.$tableAttrStr.'"';
+
+        if(strlen($tableDarkAttrStr) > 0) {
+            $tableClassNm = '_'.self::rand(31);
+            $this->darkstyleset[$tableClassNm] = $tableDarkAttrStr;
+        }
+
         if(empty($token['class']))
             $tbClassStr = '';
         else
             $tbClassStr = implode(' ', $token['class']);
         
-        return '<div class="wiki-table-wrap '.$tbClassStr.'"><table class="wiki-table" '.$tableAttrStr.'>'.$tableInnerStr.'</table></div>';
-    }
-
-    private function printCategories()
-    {
+        return '<div class="wiki-table-wrap '.$tbClassStr.'"><table class="wiki-table '.$tableClassNm.'" '.$tableAttrStr.'>'.$tableInnerStr.'</table></div>';
     }
 
     private function printFootnote(int $from, int $until)
@@ -319,5 +411,26 @@ class HTMLRenderer
         }
         $result .= '</div>';
         return $result;
+    }
+
+    /**
+     * Generate random string
+     * @param int $len  length of string
+     * @param bool $u   if use uppercase string
+     * @param string $add additional string included to generated one.
+     * @return string   generated string
+     */
+    protected static function rand(int $len=16, bool $u=false, string $add=''): string
+    {
+        $c = '0123456789abcdefghijklmnopqrstuvwxyz';
+        if($u) $c .= 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        if(strlen($add) > 0) $c .= $add;
+        
+        $cl = strlen($c);
+        $s = '';
+        for ($i=0; $i<$len; $i++) 
+            $s .= $c[rand(0, $cl-1)];
+        
+        return $s;
     }
 }

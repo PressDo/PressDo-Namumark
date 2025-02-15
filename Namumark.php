@@ -58,11 +58,16 @@ class Namumark
     public $totalPageCount = 0;
 
     /**
+     * 상단 노출 주석
+     */
+    private array $editorCommentsSet = [];
+
+    /**
      * Database 객체. false인 경우 DB 기능을 사용하지 않음.
      */
-    public $db;
+    public $db = false;
     
-    public $intable, $category = [], $firstlinebreak = false, $fromblockquote = false;
+    public $intable, $firstlinebreak = false, $fromblockquote = false;
     private $NWPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
 
     private static $list_tags = [
@@ -75,12 +80,6 @@ class Namumark
     ];
 
     private static $brackets = [
-        [
-            'open'    => '{{{',
-            'close' => '}}}',
-            'multiline' => false,
-            'processor' => 'textProcessor'
-        ],
         [
             'open'    => '{{{',
             'close' => '}}}',
@@ -177,7 +176,7 @@ class Namumark
     /**
      * 링크 데이터 (역링크 산출용)
      */
-    public $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => []];
+    public $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => [], 'category' => []];
     public static $lnkvalidity = [];
 
     private $macro_processors = [], $toc = [], $fn = [], $fn_overview = [], $fnset = [];
@@ -191,16 +190,23 @@ class Namumark
         $this->linenotend = false; // lineParser 개행구분용
     }
 
-    private static function pageExists($target) {
-        [$namespace, $title] = Controller::parseTitle($target);
-        // 각 링크의 유효성은 1번씩만 조회됨
-        if (isset(self::$lnkvalidity[$namespace.':'.$title]))
-            return self::$lnkvalidity[$namespace.':'.$title];
-        else {
-            $check = (Document::getUuid($namespace, $title) !== false);
-            self::$lnkvalidity[$namespace.':'.$title] = $check;
-            return $check;
-        }
+    /**
+     * Check if page exists
+     * @param mixed $target full title
+     */
+    private function pageExists($target) {
+        if ($this->db) {
+            [$namespace, $title] = Controller::parseTitle($target);
+            // 각 링크의 유효성은 1번씩만 조회됨
+            if (isset(self::$lnkvalidity[$namespace.':'.$title]))
+                return self::$lnkvalidity[$namespace.':'.$title];
+            else {
+                $check = (Document::getUuid($namespace, $title) !== false);
+                self::$lnkvalidity[$namespace.':'.$title] = $check;
+                return $check;
+            }
+        } else
+            return true;
     }
     
     function includePage($target) {
@@ -225,7 +231,15 @@ class Namumark
         $this->htr->fnset = $this->fnset;
         $this->htr->title = $this->title;
         unset($wtext);
-        return ($this->wikitextbox?$this->htr->render($token):'<div id="content-s-0" class="wiki-heading-content">'.$this->htr->render($token).'</div>');
+        
+        $result = $this->wikitextbox ? $this->htr->render($token) : '<div id="content-s-0" class="wiki-heading-content">'.$this->htr->render($token).'</div>';
+        return $result;
+    }
+
+    public function renderComments(): string
+    {
+        $editorComments = implode("\n", $this->editorCommentsSet);
+        return $this->htr->render($this->htmlScan($editorComments));
     }
 
     /**
@@ -245,8 +259,7 @@ class Namumark
         if (str_starts_with($text, '#') && preg_match('/^#redirect (.+)$/im', $text, $target) && $this->inThread == false) {
             $rd = [];
             $html = $this->linkProcessor($text, $rd);
-            array_push($this->links['redirect'], $rd['target']); // backlink
-
+            array_push($this->links['redirect'], $rd['target']);
             $result = array_merge($result, $html);
             return $result;
         }
@@ -262,6 +275,18 @@ class Namumark
                 $line .= self::getChar($text,$i);
                 continue;
             }
+
+            // 주석
+            if ($line == '' && str_starts_with(substr($text,$i), '##')) {
+                $xpos = strpos($text,"\n",$i);
+
+                // end of text
+                if ($xpos === false)
+                    $xpos = strlen($text) - 1;
+                $inner = $this->lineParser(substr($text, $i, $xpos - $i));
+                $i = $xpos;
+                continue;
+            }
             
             // 리스트
             if (!$this->linenotend && $line == '' && $now == ' ' && (!$this->wikitextbox || $this->firstlinebreak) && $inner = $this->listParser($text, $i)) {
@@ -272,7 +297,7 @@ class Namumark
             }
 
             // 인용문
-            if ($line == '' && str_starts_with(substr($text,$i), '>') && (!$this->wikitextbox || $this->firstlinebreak) && $inner = $this->bqParser($text, $i)) {
+            if (!$this->linenotend && $line == '' && str_starts_with(substr($text,$i), '>') && (!$this->wikitextbox || $this->firstlinebreak) && $inner = $this->bqParser($text, $i)) {
                 if ($inner !== true) {
                     array_push($result, $inner);
                     $line = '';
@@ -281,9 +306,46 @@ class Namumark
                 continue;
             }
 
-            // 사실상 삼중괄호전용
-            foreach (self::$brackets as $bracket) {
-                if (str_starts_with(substr($text,$i), $bracket['open']) && $bracket['multiline'] === true && $inner = $this->bracketParser($text, $i, $bracket)) {
+            // 문단
+            if ($line == '' && preg_match('/^(=+#?) (.*?) (#?=+)(\n|$)/', substr($text,$i), $match) && $match[1] === $match[3]) {
+                $level = strlen($match[1]);
+                $innertext = $match[2];
+
+                //+ 접힌문단 기능 추가
+                if (strpos($match[1], '#')) {
+                    $folded = true;
+                } else {
+                    $folded = false;
+                }
+
+                $id = $this->tocInsert($this->toc, $innertext, $level);
+                $token = ['type' => 'heading', 'level' => $level, 'section' => $id, 'folded' => $folded ];
+                
+
+                
+                if (preg_match('/\[anchor\((.*)\)\]/', $innertext, $anchor)) {
+                    $RealContent = str_replace($anchor[0], '', $innertext);
+                } else {
+                    $RealContent = $innertext;
+                }
+
+                $token['id'] = $RealContent;
+                $token['text'] = $this->blockParser($innertext);
+                array_push($result, $token);
+                
+                $i += strlen($match[0]) - 1;
+                continue;
+            }
+
+            //+ 수평줄
+            if (!$this->linenotend && $line == '' && preg_match('/^(-{4,9})(\n|$)/', substr($text, $i), $match)) {
+                array_push($result, ['type' => 'horizontal-line']);
+                $i += strlen($match[0]) - 1;
+                continue;
+            }
+
+            foreach (self::$brackets as $bracket) { //&& $bracket['multiline'] === true
+                if (str_starts_with(substr($text,$i), $bracket['open']) && $inner = $this->bracketParser($text, $i, $bracket)) {
                     $this->linenotend = true;
                     $result = array_merge($result, $this->lineParser($line), $inner);
                     $line = '';
@@ -323,22 +385,11 @@ class Namumark
         }
         if ($line != '')
             $result = array_merge($result, $this->lineParser($line));
-        if ($this->wikitextbox !== true) {
+        if ($this->wikitextbox !== true && $this->fn_cnt !== $this->lastfncount) {
             array_push($this->fnset, $this->fn_names);
             array_push($result, ['type' => 'footnotes', 'from' => $this->lastfncount, 'until' => $this->fn_cnt]);
         }
 
-        // 분류 모음
-        if (!empty($this->category) && $this->inThread !== false) {
-            array_push($result, ['type' => 'categories']);
-            /* .= '<div id="categories" class="wiki-categories">
-                            <h2>분류</h2>
-                            <ul>';
-            foreach ($this->category as $category) {
-                $result .= '<li class="wiki-categories">'.$this->linkProcessor(':분류:'.$category.'|'.$category, '[[').'</li>';
-            }
-            $result .= '</ul></div>';*/
-        }
         unset($line, $text, $inner);
         return $result;
     }
@@ -395,7 +446,6 @@ class Namumark
         }
 
         $innerhtml = $this->blockParser($innerstr, true, true);
-        //var_dump($innerstr, htmlspecialchars($innerhtml));
         $offset = $i-1;
         $this->bqcount--;
         return ['type' => 'blockquote', 'html' => $innerhtml];
@@ -404,11 +454,14 @@ class Namumark
     //+ Rebuilt by PRASEOD-
     private function tableParser($text, &$offset): array|false
     {   
-        $token = ['type' => 'table', 'class' => [], 'caption' => null, 'colstyle' => [], 'rows' => []];
+        $token = ['type' => 'table', 'class' => [], 'caption' => null, 'colstyle' => [], 'rows' => [], 'colclass' => []];
         $tableinit = true;
         $tableAttr = [];
+        $tableDarkAttr = [];
         $tableCls = [];
         $tdAttr = [];
+        $tdDarkAttr = [];
+        $tdClass = [];
         $tableattrinit = [];
         $tdInnerStr = '';
         $unloadedstr = '';
@@ -472,8 +525,8 @@ class Namumark
                 $unloadedstr .= '}}}';
                 $inEscape--;
                 $i += 2;
-                if ($inEscape === 0)
-                    $brInEscape = false;
+                //if ($inEscape === 0)
+                //    $brInEscape = false;
                 continue;
             } elseif (str_starts_with(substr($text,$i), '||')) {
                 if ($inEscape > 0) {
@@ -509,8 +562,10 @@ class Namumark
                     
                     $tdInnerStr .= $this->blockParser($unloadedstr);
                     $unloadedstr = '';
-                    $token['rows'][$rowIndex]['cols'][$colIndex] = ['text' => $tdInnerStr, 'style' => $tdAttr];
+                    $token['rows'][$rowIndex]['cols'][$colIndex] = ['text' => $tdInnerStr, 'style' => $tdAttr, 'dark-style' => $tdDarkAttr, 'class' => $tdClass];
+                    $tdDarkAttr = [];
                     $tdAttr = [];
+                    $tdClass = [];
                     if ($rowspan > 0) {
                         $token['rows'][$rowIndex]['cols'][$colIndex]['rowspan'] = $rowspan;
                         $rowspan = 0;
@@ -532,7 +587,8 @@ class Namumark
                     continue;
                 }
                 continue;
-            } elseif ($tdInnerStr == '' && $unloadedstr == '' && str_starts_with(substr($text,$i), '<') && preg_match('/^((<(tablealign|table align|tablebordercolor|table bordercolor|tablecolor|table color|tablebgcolor|table bgcolor|tablewidth|table width|rowbgcolor|rowcolor|colbgcolor|colcolor|width|height|color|bgcolor)=[^>]+>|<(-[0-9]+|\|[0-9]+|\^\|[0-9]+|v\|[0-9]+|\:|\(|\)|(#?[0-9A-Za-z]+))>)+)/', strtolower(substr($text,$i, self::seekStr($text, "\n", $i) - $i)), $match) && (empty($match[5]) || self::chkColor($match[5]))) {
+            } elseif ($tdInnerStr == '' && $unloadedstr == '' && str_starts_with(substr($text,$i), '<')
+                && preg_match('/^((<(table ?align|table ?bordercolor|table ?color|table ?bgcolor|table ?width|rowbgcolor|rowcolor|colbgcolor|colcolor|width|height|color|bgcolor)=[^>]+>|<(-[0-9]+|\|[0-9]+|\^\|[0-9]+|v\|[0-9]+|\:|\(|\)|(#?[0-9A-Za-z,]+))>)+)/', strtolower(substr($text,$i, self::seekStr($text, "\n", $i) - $i)), $match) && (empty($match[5]) || in_array($match[5], ['nopad', 'keepall', 'rowkeepall', 'colkeepall']) || self::chkColor($match[5]))) {
                 $attrs = explode('><', substr($match[1], 1, strlen($match[1])-2));
                 $emptytd = false;
                 foreach ($attrs as $attr) {
@@ -541,11 +597,11 @@ class Namumark
                         $attrxs = str_replace(' ', '', $tbattr[1]);
                         // 속성은 최초 설정치가 적용됨
                         if (
-                            !in_array($attrxs, $tableattrinit)
+                            !in_array($attrxs, $tableattrinit) // 속성은 여러 번 지정할 수 없음
                             && (
-                                (in_array($tbattr[1], ['tablealign', 'table align']) && in_array($tbattr[2], ['center', 'left', 'right']))
-                                || (in_array($tbattr[1], ['tablewidth', 'table width']) && preg_match('/^-?[0-9.]*(px|%|)$/', $tbattr[2], $tbw))
-                                || (in_array($tbattr[1], ['tablebgcolor', 'table bgcolor', 'tablecolor', 'table color', 'tablebordercolor', 'table bordercolor']) && self::chkColor($tbattr[2]))
+                                ($attrxs == 'tablealign' && in_array($tbattr[2], ['center', 'left', 'right']))
+                                || ($attrxs == 'tablewidth' && preg_match('/^-?[0-9.]*(px|%|)$/', $tbattr[2], $tbw))
+                                || (in_array($attrxs, ['tablebgcolor', 'tablecolor', 'tablebordercolor']) && self::chkColor($tbattr[2]))
                             )
                         ) {
                             // 표 속성
@@ -558,9 +614,9 @@ class Namumark
                                 case 'tablecolor':
                                     $tbAttrNm = 'color';
                                     break;
-                                //case 'tablebordercolor':
-                                //    $tbAttrNm = 'border-color';
-                                //    break;
+                                case 'tablebordercolor':
+                                    $tbAttrNm = 'border-color';
+                                    break;
                                 case 'tablewidth':
                                     $tbAttrNm = 'width';
                                     if ($tbw[1] == '')
@@ -571,7 +627,12 @@ class Namumark
                             }
                             if ($attrxs == 'tablealign' && ($tbattr[2] == 'center' || $tbattr[2] == 'right'))
                                 array_push($tableCls, 'table-'.$tbattr[2]);
-                            else
+                            elseif (strpos($attrxs, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                                $colors = explode(',', $tbattr[2]);
+                                //$class = '_'.self::rand(31);
+                                $tableDarkAttr[$tbAttrNm] = $colors[1];
+                                $tableAttr[$tbAttrNm] = $colors[0];
+                            } else
                                 $tableAttr[$tbAttrNm] = $tbattr[2];
                         } elseif (
                             // 개별 행 속성
@@ -589,7 +650,13 @@ class Namumark
                                 default:
                                     $tbAttrNm = $tbattr[1];
                             }
-                            $token['rows'][$rowIndex]['style'][$tbAttrNm] = $tbattr[2];
+                            if (strpos($tbAttrNm, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                                $colors = explode(',', $tbattr[2]);
+                                //$class = '_'.self::rand(31);
+                                $token['rows'][$rowIndex]['dark-style'][$tbAttrNm] = $colors[1];
+                                $token['rows'][$rowIndex]['style'][$tbAttrNm] = $colors[0];
+                            } else
+                                $token['rows'][$rowIndex]['style'][$tbAttrNm] = $tbattr[2];
                         } elseif (
                             // 개별 열 속성
                             in_array($tbattr[1], ['colbgcolor', 'colcolor']) && 
@@ -606,11 +673,20 @@ class Namumark
                                 default:
                                     $tbAttrNm = $tbattr[1];
                             }
-                            $token['colstyle'][$colIndex][$rowIndex][$tbAttrNm] = $tbattr[2];
-                            $tdAttr[$tbAttrNm] = $tbattr[2];
+                            if (strpos($tbAttrNm, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                                $colors = explode(',', $tbattr[2]);
+                                //$class = '_'.self::rand(31);
+                                $token['coldarkstyle'][$colIndex][$rowIndex][$tbAttrNm] = $colors[1];
+                                $token['colstyle'][$colIndex][$rowIndex][$tbAttrNm] = $colors[0];
+                                $tdDarkAttr[$tbAttrNm] = $colors[1];
+                                $tdAttr[$tbAttrNm] = $colors[0];
+                            } else {
+                                $token['colstyle'][$colIndex][$rowIndex][$tbAttrNm] = $tbattr[2];
+                                $tdAttr[$tbAttrNm] = $tbattr[2];
+                            }
                         } elseif (
                             // 개별 셀 속성
-                            (in_array($tbattr[1], ['width', 'height']) && preg_match('/^-?[0-9.]*(px|%)?$/', $tbattr[2])) ||
+                            (in_array($tbattr[1], ['width', 'height']) && preg_match('/^-?[0-9.]*(px|%)?$/', $tbattr[2], $tbw)) ||
                             (in_array($tbattr[1], ['color', 'bgcolor']) && self::chkColor($tbattr[2]))
                         ) {
                             $i += strlen($tbattr[0]) + 2;
@@ -618,10 +694,20 @@ class Namumark
                                 case 'bgcolor':
                                     $tbAttrNm = 'background-color';
                                     break;
+                                case 'width':
+                                case 'height':
+                                    if ($tbw[1] == '')
+                                        $tbattr[2] .= 'px';
                                 default:
                                     $tbAttrNm = $tbattr[1];
                             }
-                            $tdAttr[$tbAttrNm] = $tbattr[2];
+                            if (strpos($tbAttrNm, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                                $colors = explode(',', $tbattr[2]);
+                                //$class = '_'.self::rand(31);
+                                $tdDarkAttr[$tbAttrNm] = $colors[1];
+                                $tdAttr[$tbAttrNm] = $colors[0];
+                            } else
+                                $tdAttr[$tbAttrNm] = $tbattr[2];
                         }
                     } elseif (preg_match('/^(-|\|)([0-9]+)$/', $attr, $tbspan)) { // 
                         $i += strlen($tbspan[0]) + 2;
@@ -653,8 +739,34 @@ class Namumark
                                 $tdAttr['text-align'] = 'right';
                                 $i += 3;
                         }
+                    } elseif ($attr == 'nopad' || strpos($attr, 'keepall') !== false) {
+                        switch ($attr) {
+                            case 'nopad':
+                                array_push($tdClass, 'wiki-table-nopadding');
+                                break;
+                            case 'keepall':
+                                array_push($tdClass, 'wiki-table-keepall');
+                                break;
+                            case 'rowkeepall':
+                                if (!is_array($token['rows'][$rowIndex]['class']))
+                                    $token['rows'][$rowIndex]['class'] = [];
+                                array_push($token['rows'][$rowIndex]['class'], 'wiki-table-keepall');
+                                break;
+                            case 'colkeepall':
+                                $token['colclass'][$colIndex][$rowIndex] = ['wiki-table-keepall'];
+                                break;
+                        }
+                        $i += strlen($attr) + 2;
                     } else {
                         $i += strlen($attr) + 2;
+
+                        // <#fff>
+                        if (strpos($attr, ',') !== false) {
+                            $colors = explode(',', $attr);
+                            //$class = '_'.self::rand(31);
+                            $tdDarkAttr['background-color'] = $colors[1];
+                            $tdAttr['background-color'] = $colors[0];
+                        } else
                         $tdAttr['background-color'] = $attr;
                     }
                 }
@@ -695,6 +807,7 @@ class Namumark
 
         $token['class'] = $tableCls;
         $token['style'] = $tableAttr;
+        $token['dark-style'] = $tableDarkAttr;
         $offset = $i-1;
         return $token;
     }
@@ -710,38 +823,38 @@ class Namumark
         $eol = false;
         $listdata = ['type' => 'list', 'lists' => []];
         $html = '';
-        $inEscape = 0;
+        $inBracket = 0;
         ++$offset;
         ++$this->ind_level;
         
         for ($i=$offset; $i<$len; self::nextChar($text,$i)) {
             $now = self::getChar($text, $i);
 
-            if ($eol && $now !== ' ' && $inEscape < 1) {
+            if ($eol && $now !== ' ' && $inBracket < 1) {
+                // 들여쓰기 없음 - 인덴트 끝
                 $list['html'] = $this->blockParser($html, true);
                 $html = '';
                 array_push($listdata['lists'], $list);
                 $list = [];
-                break; // 리스트 끝
+                break;
             } elseif ($eol) {
                 // 현재 들여쓰기 칸만큼 스킵
-                //if (!$skipbreak)  리스트 개행 간격
-                $now = self::nextChar($text,$i);
+                //$i += $this->ind_level - 1;
+                $eol = false;
+                continue;
             }
             
             if (str_starts_with(substr($text,$i), '{{{') && strpos(substr($text,$i), '}}}') !== false) {
                 $html .= '{{{';
                 $i += 2;
-                ++$inEscape;
+                ++$inBracket;
                 continue;
-            } elseif (str_starts_with(substr($text,$i), '}}}') && $inEscape > 0) {
+            } elseif (str_starts_with(substr($text,$i), '}}}') && $inBracket > 0) {
                 $html .= '}}}';
                 $i += 2;
-                --$inEscape;
+                --$inBracket;
                 continue;
-            } elseif (
-                ($linestart && preg_match('/^((\*|1\.|a\.|A\.|I\.|i\.)(#[^ ]*)? ?)(.*)/', substr($text,$i), $match))
-            ) {
+            } elseif ($linestart && preg_match('/^((\*|1\.|a\.|A\.|I\.|i\.)(#[^ ]*)? ?)(.*)/', substr($text,$i), $match) && !($match[2] == '*' && strlen($match[3]) > 0)) {
                 // 리스트
                 if (!empty($html)) {
                     $list['html'] = $this->blockParser($html, ($listdata['listtype'] == 'wiki-indent'));
@@ -749,6 +862,7 @@ class Namumark
                     array_push($listdata['lists'], $list);
                     $list = [];
                 }
+                
                 $listdata['listtype'] = self::$list_tags[$match[2]];
                 if (!isset($listdata['start']))
                     $listdata['start'] = substr($match[3], 1);
@@ -758,17 +872,17 @@ class Namumark
 
                 $i += strlen($match[1]) - 1;
 
-                $emptyline = false;
                 if ($eol)
                     $eol = false;
                 if ($linestart)
                     $linestart = false;
                 continue;
-            } elseif ($linestart && !$eol) { //  && !$this->fromblockquote
+            } elseif ($linestart) { //  && !$this->fromblockquote
                 // 들여쓰기
-                $listdata['listtype'] = 'wiki-indent';
-            } elseif ($eol) {
-                $html .= "\n";
+                if (empty($listdata['listtype']))
+                    $listdata['listtype'] = 'wiki-indent';
+            } else {
+                //$html .= "\n";
                 $eol = false;
             }
 
@@ -776,18 +890,14 @@ class Namumark
                 $linestart = false;
             }
             
-            if ($now == "\n" && $inEscape < 1) {
-                // 공백 처리
-                //if ($emptyline)
-                //    $skipbreak = true;
-                //$emptyline = true;
+            if ($now == "\n" && $inBracket < 1) {
                 $eol = true;
                 $linestart = true;
-                continue;
+                if (str_ends_with($html, "\n"))
+                    continue;
             }
 
             $html .= $now;
-            //$emptyline = false;
         }
 
         if (!empty($html)) {
@@ -798,11 +908,9 @@ class Namumark
 
         $offset = $i - 1;
         --$this->ind_level;
-        unset($text);
         if (empty($listdata['lists']))
             return false;
 
-        //var_dump($listdata);    
         return $listdata;
     }
 
@@ -812,45 +920,12 @@ class Namumark
         $token = [];
 
         //+ 공백 있어서 안 되는 오류 수정
-        if (str_starts_with($line, '##')) {
+        if (str_starts_with($line, '##@')) {
+            // 상단 주석
+            array_push($this->editorCommentsSet, substr($line, 3)); // 원래는 trim 해서 집어넣어야 함.
+            $line = '';
+        } elseif (str_starts_with($line, '##')) {
             // 주석
-            $line = '';
-        } elseif (str_starts_with($line, '=') && preg_match('/^(=+) (.*?) (=+) *(\n)?$/', trim($line), $match) && $match[1]===$match[3]) {
-            // 문단
-            $level = strlen($match[1]);
-            $innertext = $match[2];
-
-            //+ 접힌문단 기능 추가
-            if (preg_match('/^# (.*) #$/', $innertext, $ftoc)) {
-                $folded = true;
-                $innertext = $ftoc[1];
-            } else {
-                $folded = false;
-            }
-
-            $id = $this->tocInsert($this->toc, $innertext, $level);
-            $token = ['type' => 'heading', 'level' => $level, 'section' => $id, 'folded' => $folded ];
-            
-
-            
-            if (preg_match('/\[anchor\((.*)\)\]/', $innertext, $anchor)) {
-                $RealContent = str_replace($anchor[0], '', $innertext);
-                //$result .= '<a id="'.$anchor[1].'"></a><span id="'.trim($RealContent).'">'.$RealContent;
-            } else {
-                $RealContent = $innertext;
-                //$result .= '<span id="'.strip_tags($innertext).'">'.$innertext;
-            }
-
-            $token['id'] = $RealContent;
-            $token['text'] = $this->blockParser($innertext);
-            array_push($result, $token);
-            
-            $line = '';
-        }
-
-        //+ 수평줄 문제 개선
-        if (preg_match('/^[ ]*(-{4,9})$/', $line)) {
-            array_push($result, ['type' => 'plaintext', 'text' => '<hr class="wiki-hr">']);
             $line = '';
         }
 
@@ -876,8 +951,10 @@ class Namumark
         $defaultl = $this->linenotend;
         $this->wikitextbox = true;
         $this->linenotend = false;
-        $this->firstlinebreak = ($isWikiTextBox);
-        $this->fromblockquote = ($isBlockQuote);
+
+        // 삼중괄호 문법 후 개행 여부
+        $this->firstlinebreak = $isWikiTextBox;
+        $this->fromblockquote = $isBlockQuote;
         $content = $this->toHtml($block);
         $this->wikitextbox = $defaultw;
         $this->linenotend = $defaultl;
@@ -891,12 +968,16 @@ class Namumark
     {
         $len = strlen($text);
         $cnt = 0;
+        $inEscape = 0;
         $unloadedstr = '';
         $loadedstr = [];
         $openlen = strlen($bracket['open']);
 
         if (!isset($bracket['strict']))
             $bracket['strict'] = true;
+
+        if (strpos($text, $bracket['close'], $now + $openlen) === false)
+            return false;
 
         // 한글자씩 스캔
         for ($i=$now+$openlen;$i<$len;self::nextChar($text,$i)) {
@@ -909,11 +990,26 @@ class Namumark
                 $char = '';
                 continue;
             } else*/
-            if (str_starts_with(substr($text,$i), $bracket['open']) && $bracket['open'] !== $bracket['close']) {
-                // 중첩구간처리
+            if (str_starts_with(substr($text,$i), '{{{') && strpos(substr($text, $i), '}}}') !== false) {
+                // 삼중괄호 안 닫기를 무효화 처리하기 위한 부분
+                $unloadedstr .= '{{{';
+                $inEscape++;
+                $i += 2;
+                continue;
+            } elseif (str_starts_with(substr($text,$i), '}}}') && $inEscape > 0) {
+                $unloadedstr .= '}}}';
+                $inEscape--;
+                $i += 2;
+                continue;
+            } elseif (str_starts_with(substr($text,$i), $bracket['open']) && $bracket['open'] !== $bracket['close']) {
+                // 중첩구간처리 ($bracket이 {{{}}}이 아닌 경우에도 처리되도록 작업요)
                 $cnt++;
                 $i += strlen($bracket['open']) - 1;
                 $unloadedstr .= $bracket['open'];
+                continue;
+            } elseif (str_starts_with(substr($text,$i), $bracket['close']) && $inEscape > 0) {
+                $unloadedstr .= $bracket['close'];
+                $i += strlen($bracket['close']) - 1;
                 continue;
             } elseif (str_starts_with(substr($text,$i), $bracket['close']) && $cnt > 0) {
                 $cnt--;
@@ -922,8 +1018,8 @@ class Namumark
                 continue;
             } elseif (str_starts_with(substr($text,$i), $bracket['close']) && $cnt === 0) {
                 // 닫는괄호
-                if ($bracket['strict'] && $bracket['multiline'] && strpos($unloadedstr, "\n")===false)
-                    return false;
+                //if ($bracket['strict'] && $bracket['multiline'] && strpos($unloadedstr, "\n")===false)
+                //    return false;
                 
                 $argarray = [$unloadedstr];
                 if ($bracket['processor'] == 'textProcessor')
@@ -932,8 +1028,8 @@ class Namumark
                 $loadedstr = array_merge($loadedstr, call_user_func_array([$this, $bracket['processor']],$argarray));
                 $now = $i+strlen($bracket['close'])-1;
                 return $loadedstr;
-            } elseif (!$bracket['multiline'] && $char == "\n")
-                return false; // 개행금지 문법에서 개행 발견
+            } elseif (!$bracket['multiline'] && $char == "\n" && $inEscape === 0)
+                return false; // 개행금지 문법에서 개행 발견 (삼중괄호 제외)
             elseif ($char == "\n")
                 $this->firstlinebreak = true;
             
@@ -962,7 +1058,7 @@ class Namumark
             } else {
                 foreach (self::$brackets as $bracket) {
                     $nj=$j;
-                    if (str_starts_with(substr($line,$j), $bracket['open']) && $bracket['multiline'] === false && $inner = $this->bracketParser($line, $nj, $bracket)) {
+                    if (str_starts_with(substr($line,$j), $bracket['open']) && $inner = $this->bracketParser($line, $nj, $bracket)) {
                         array_push($result, ['type' => 'plaintext', 'text' => $inline]);
                         $result = array_merge($result, $inner);
                         $inline = '';
@@ -1093,13 +1189,22 @@ class Namumark
         } elseif (preg_match('/^\-([1-5]) (.*)/', $text, $size)) {
             // {{{-작은글씨}}}
             return [['type' => 'wiki-size', 'size' => 'down-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
-        } elseif (preg_match('/^(#[A-Fa-f0-9]{3}|#[A-Fa-f0-9]{6}|#([A-Za-z]+)) (.*)/', $text, $color) && (self::chkColor($color[1]) || self::chkColor($color[2]))) {
-            //if (empty($color[1]))
-            //    return [['type' => 'plaintext', 'text' => $text]];
-            // 실제로는 작동하지 않는 영역으로 추정.
-            return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1]) + 1))]];
+        } elseif (preg_match('/^([#0-9A-Za-z,]+) (.*)/', $text, $match) && self::chkColor($match[1], true)) {
+            if (strpos($match[1], ',') !== false) {
+                $colors = explode(',', $match[1]);
+                if (preg_match('/(#[0-9a-f]{3}|#[0-9a-f]{6}|[0-9a-z]+)$/i', $colors[0], $cmatch))
+                    $wcolor = $cmatch[1];
+
+                if (preg_match('/(#[0-9a-f]{3}|#[0-9a-f]{6}|[0-9a-z]+)$/i', $colors[1], $cmatch))
+                    $dcolor = $cmatch[1];
+            } elseif (preg_match('/(#[0-9a-f]{3}|#[0-9a-f]{6}|[0-9a-z]+)$/i', $match[1], $cmatch))
+                $wcolor = $cmatch[1];
+            return [['type' => 'colortext', 'color' => $wcolor, 'dark-color' => $dcolor, 'text' => $this->blockParser(substr($text, strlen($match[1]) + 1))]];            
         } else {
-            return [['type' => 'rawtext', 'text' => htmlspecialchars($text)]];
+            if (strpos($text, "\n") !== false)
+                return [['type' => 'rawtext', 'text' => htmlspecialchars($text)]];
+            else
+                return [['type' => 'escape', 'text' => htmlspecialchars($text)]];
             // 문법 이스케이프
         }
     }
@@ -1115,6 +1220,7 @@ class Namumark
         $unloadedstr = '';
         $classList = [];
         $imgAttr = '';
+        $imgDarkAttr = '';
         $len = strlen($text);
         $redirect = strpos($text, '#redirect') === 0;
         $forcetext = false;
@@ -1181,15 +1287,19 @@ class Namumark
             $display = $locallink ? $inSharp : $target;
         }
 
+        if ($target[0] == ' ') {
+            $forcetext = true;
+            $target = trim($target);
+        }
+
         if ($redirect) {
             $lt_redirect = 'redirect';
-        } elseif (strpos($target, '파일:') === 0) {
+        } elseif (strpos($target, '파일:') === 0 && !$forcetext) {
             // 파일 삽입
             $imgAlign = 'normal';
             $changed = '';
             $preserved = '';
             $wrapTag = '';
-            $bgcolor = '';
             if (strlen($unloadedstr) > 0) {
                 $options = explode('&', $unloadedstr);
                 foreach ($options as $option) {
@@ -1227,7 +1337,12 @@ class Namumark
                         case 'bgcolor':
                             if (!self::chkColor($opt[1]))
                                 continue;
-                            $bgcolor .= 'background-color:'.$opt[1].';';
+                            if (strpos($opt[1], ',') !== false) {
+                                $colors = explode(',', $opt[1]);
+                                $imgDarkAttr .= 'background-color:'.$colors[1].'!important;';
+                                $imgAttr .= 'background-color:'.$colors[0].';';
+                            }
+                            $imgAttr .= 'background-color:'.$opt[1].';';
                             break;
                         case 'theme':
                             if ($opt[1] !== 'dark' && $opt[1] !== 'light')
@@ -1247,10 +1362,10 @@ class Namumark
             
             if ($imgAlign == 'center') {
                 $attr_align = '';
-                $attr_wrapper = ' style="'.$imgAttr.$bgcolor.'"';
+                $attr_wrapper = ' style="'.$imgAttr.'"';
             } else {
                 $attr_align = ' style="'.$changed.'"';
-                $attr_wrapper = ' style="'.$preserved.$bgcolor.'"';
+                $attr_wrapper = ' style="'.$preserved.'"';
             }
 
             $fileName = substr($target, strlen('파일:'));
@@ -1265,9 +1380,17 @@ class Namumark
             array_push($this->links['file'], $target);
 
             return [['type' => 'link', 'linktype' => 'file', 'class' => ['wiki-link-internal'], 'href' => $href, 'text' => $target, 'imgalign' => $imgAlign, 'attralign' => $attr_align, 'attrwrapper' => $attr_wrapper, 'wraptag' => $wrapTag, 'fnwithouttext' => $fnWithoutExt]];
-        } elseif (strpos($target, '분류:') === 0) {
-            // 분류 삽입
-            array_push($this->category, substr($target, strlen('분류:')));
+        } elseif (strpos($target, '분류:') === 0 && !$forcetext) {
+            $categoryname = substr($target, strlen('분류:'));
+
+            if (!$this->pageExists($target))
+                array_push($classList, 'not-exist');
+
+            if ($inSharp == '#blur')
+                array_push($classList, 'blur');
+
+            if (!isset($this->links['category'][$categoryname]))
+                $this->links['category'][$categoryname] = $classList;
             
             return [['type' => 'void']];
         } elseif ($display === null) {
@@ -1275,9 +1398,12 @@ class Namumark
             $display = $this->blockParser($unloadedstr);
             
             $unloadedstr = '';
+        } else {
+            // : is not for escape
+            $target = ':'.$target;
         }
 
-        if (preg_match('@^https?://([^\.]+\.)+[^\.]{2,}$@', $target, $domain)) {
+        if (preg_match('@^(https?|ftp)://([^\.]+\.)+[^\.]{2,}$@', $target, $domain)) {
             // URL
             $href = $target;
             array_push($classList, 'wiki-link-external');
@@ -1315,7 +1441,7 @@ class Namumark
                 $href = '/w/'.$target.$inSharp;
         }
 
-        if (in_array('wiki-link-internal', $classList) && !self::pageExists($target))
+        if (in_array('wiki-link-internal', $classList) && !$this->pageExists($target))
             array_push($classList, 'not-exist');    
         
         if ($redirect)
@@ -1349,7 +1475,7 @@ class Namumark
                 return [['type' => 'footnotes', 'from' => $from, 'until' => $this->fn_cnt]];
             case 'clearfix':
                 //+ clearfix
-                return [['type' => 'plaintext', 'text' => '<div style="clear:both;"></div>']];
+                return [['type' => 'clear']];
             case 'pagecount':
                 return [['type' => 'plaintext', 'text' => $this->totalPageCount]];
             default:
@@ -1464,6 +1590,7 @@ class Namumark
                         if ($split[0] == 'ruby') {
                             $rb = $split[1];
                         } elseif ($split[0] == 'color' && self::chkColor($split[1])) {
+                            // dark theme unsupported
                             $color = $split[1];
                         }
                     }
@@ -1542,22 +1669,6 @@ class Namumark
             case ',,':
                 // 아래첨자
                 return array_merge([['type' => 'text-start', 'effect' => $tagnameset[$type]]], $text, [['type' => 'text-end', 'effect' => $tagnameset[$type]]]);
-            case '{{{':
-                // 개행 없어도 적용되는 삼중괄호 문법
-                if (str_starts_with($text, '#!html')) {
-                    if ($this->inThread)
-                        return [['type' => 'void']];
-                    return [['type' => 'inline-html', 'text' => substr($text, 7)]];
-                } elseif (preg_match('/^\+([1-5]) (.*)/', $text, $size))
-                    return [['type' => 'wiki-size', 'size' => 'up-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
-                elseif (preg_match('/^\-([1-5]) (.*)/', $text, $size))
-                    return [['type' => 'wiki-size', 'size' => 'down-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
-                elseif (preg_match('/^(#[A-Fa-f0-9]{3}|#[A-Fa-f0-9]{6}|#([A-Za-z]+)) (.*)/', $text, $color) && (self::chkColor($color[1]) || self::chkColor($color[2]))) {
-                    //if (empty($color[1]) && empty($color[2]))
-                    //    return [['type' => 'plaintext', 'text' => $text]];
-                    return [['type' => 'colortext', 'color' => (empty($color[2])?$color[1]:$color[2]), 'text' => $this->blockParser(substr($text, strlen($color[1]) + 1))]];
-                } else // 문법 이스케이프
-                    return [['type' => 'escape', 'text' => htmlspecialchars($text)]];
             }
             return [['type' => 'plaintext', 'text' => $type.$text.$type]];
     }
@@ -1632,13 +1743,18 @@ class Namumark
         $pointer = $target_point['pos'];
     }
 
-    private static function chkColor(string $color, $sharp = '#'): bool
+    private static function chkColor(string $color, bool $sharponcsscolors = false): bool
     {
-        if (preg_match('/^'.$sharp.'([0-9a-fA-F]{3}|[0-9a-fA-F]{6})/', $color))
-            return true;
-        elseif (in_array($color, self::$cssColors))
-            return true;
-        else
-            return false;
+        $colorset = explode(',', $color);
+        foreach ($colorset as $c) {
+            if ($sharponcsscolors)
+                $cs = substr($c,1);
+
+            if (!preg_match('/^#([0-9a-f]{3}|[0-9a-f]{6})/i', $c) && !in_array(strtolower($cs ?? $c), self::$cssColors))
+                return false;
+            $cs = null;
+        }
+        
+        return true;
     }
 }

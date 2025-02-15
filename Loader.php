@@ -20,13 +20,14 @@ class Loader
             'link' => array_unique($wEngine->links['link']),
             'redirect' => array_unique($wEngine->links['redirect']),
             'file' => array_unique($wEngine->links['file']),
-            'include' => array_unique($wEngine->links['include'])
+            'include' => array_unique($wEngine->links['include']),
+            'category' => $wEngine->links['category'],
         ];
     
         // toHtml을 호출하면 HTML 페이지가 생성됩니다.
         if ($options['thread'])
             return $wHtml;
         else
-            return ['html' => $wHtml, 'categories' => $wEngine->category, 'links' => $wLink];
+            return ['html' => $wHtml, 'categories' => $wEngine->links['category'], 'links' => $wLink];
     }
 }
