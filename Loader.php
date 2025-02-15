@@ -8,7 +8,6 @@ class Loader
         require_once 'HTMLRenderer.php';
         
         $wEngine = new Namumark();
-        $wEngine->prefix = "";
         $wEngine->title = $options['title'];
         $wEngine->inThread = $options['thread'];
         $wEngine->db = true;

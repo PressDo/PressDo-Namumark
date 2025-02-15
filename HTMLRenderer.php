@@ -1,5 +1,9 @@
 <?php
 namespace PressDo\app\Helpers\Mark;
+/**
+ * HTML Renderer for Tokenized Namumark
+ * @author PRASEOD-
+ */
 class HTMLRenderer
 {
     public $title, $toc = [], $fn_overview = [], $fn = [], $fnset = [], $darkstyleset = [];
@@ -22,7 +26,12 @@ class HTMLRenderer
                     $result .= '<pre><code class="syntax" data-language="'.$t['language'].'">'.$t['text'].'</code></pre>';
                     break;
                 case 'wikitext':
-                    $result .= '<div '.$t['attr'].'>'.$t['text'].'</div>';
+                    if (!empty($t['dark-attr'])){
+                        $class = '_'.self::rand(31);
+                        $this->darkstyleset[$class] = $t['dark-attr'];
+                        $result .= '<div class="'.$class.'" '.$t['attr'].'>'.$t['text'].'</div>';
+                    } else
+                        $result .= '<div '.$t['attr'].'>'.$t['text'].'</div>';
                     break;
                 case 'inline-html':
                     $result .= '<html>'.$t['text'].'</html>';
@@ -176,6 +185,27 @@ class HTMLRenderer
         $tableAttr = $token['style'];
         $tableDarkAttr = $token['dark-style'];
 
+        if(!empty($token['coldarkstyle'])){
+            foreach($token['coldarkstyle'] as $cci => $cs){
+                foreach($cs as $ccr => $ccs){
+                    $rcnt = count($token['rows']);
+                    for($j=$ccr; $j<$rcnt; $j++){
+                        if(isset($token['rows'][$j]['cols'][$cci])){
+                            foreach ($ccs as $ccck => $cccs) {
+                                if (!empty($token['rows'][$j]['cols'][$cci]['style'][$ccck]))
+                                    continue;
+
+                                if(!isset($token['rows'][$j]['cols'][$cci]['dark-style']))
+                                    $token['rows'][$j]['cols'][$cci]['dark-style'][$ccck] = $cccs;
+                                else
+                                    $token['rows'][$j]['cols'][$cci]['dark-style'][$ccck] = $cccs;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if(!empty($token['colstyle'])){
             foreach($token['colstyle'] as $cci => $cs){
                 foreach($cs as $ccr => $ccs){
@@ -186,22 +216,6 @@ class HTMLRenderer
                                 $token['rows'][$j]['cols'][$cci]['style'] = $ccs;
                             else
                                 $token['rows'][$j]['cols'][$cci]['style'] = array_merge($ccs, $token['rows'][$j]['cols'][$cci]['style']);
-                        }
-                    }
-                }
-            }
-        }
-
-        if(!empty($token['coldarkstyle'])){
-            foreach($token['coldarkstyle'] as $cci => $cs){
-                foreach($cs as $ccr => $ccs){
-                    $rcnt = count($token['rows']);
-                    for($j=$ccr; $j<$rcnt; $j++){
-                        if(isset($token['rows'][$j]['cols'][$cci])){
-                            if(!isset($token['rows'][$j]['cols'][$cci]['dark-style']))
-                                $token['rows'][$j]['cols'][$cci]['dark-style'] = $ccs;
-                            else
-                                $token['rows'][$j]['cols'][$cci]['dark-style'] = array_merge($ccs, $token['rows'][$j]['cols'][$cci]['dark-style']);
                         }
                     }
                 }
