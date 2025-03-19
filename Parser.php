@@ -1,5 +1,5 @@
 <?php
-namespace PressDo\app\Helpers\Mark;
+namespace PressDo\App\Services\Mark\Namumark;
 /**
  * namumark.php - Namu Mark Renderer
  * Copyright (C) 2015 koreapyj koreapyj0@gmail.com
@@ -24,10 +24,10 @@ namespace PressDo\app\Helpers\Mark;
  * 설명 주석이 +로 시작하는 경우 PRASEOD-의 2차 수정 과정에서 추가된 코드입니다.
  */
 
-use PressDo\app\Models\Document;
-use PressDo\app\Core\Controller;
+use PressDo\App\Models\Document;
+use PressDo\App\Core\Controller;
 
-class Namumark
+class Parser
 {
     /**
      * 엔진에 표시되는 문서 제목
@@ -58,19 +58,22 @@ class Namumark
     public $totalPageCount = 0;
 
     /**
-     * 상단 노출 주석
+     * 상단 노출 주석 (라인 단위 저장)
      */
     private array $editorCommentsSet = [];
+
+    
+    public string $indexedString = '';
 
     /**
      * Database 객체. false인 경우 DB 기능을 사용하지 않음.
      */
-    public bool $db = false;
+    public bool $db = true;
     
     public $intable, $firstlinebreak = false, $fromblockquote = false;
     private $NWPage, $wikitextbox = false, $imageAsLink, $linenotend, $htr;
 
-    private static $list_tags = [
+    private const LIST_CLASS = [
         '*' => 'wiki-ul',
         '1.' => 'wiki-list',
         'A.' => 'wiki-list wiki-list-upper-alpha',
@@ -79,7 +82,7 @@ class Namumark
         'i.' => 'wiki-list wiki-list-roman'
     ];
 
-    private static $brackets = [
+    private const BRACKETS = [
         [
             'open'    => '{{{',
             'close' => '}}}',
@@ -143,7 +146,7 @@ class Namumark
         ]
     ];
 
-    private static $cssColors = [
+    private const COLOR_NAMESET = [
         'black','gray','grey','silver','white','red','maroon','yellow','olive','lime','green','aqua','cyan','teal','blue','navy','magenta','fuchsia','purple',
         'dimgray','dimgrey','darkgray','darkgrey','lightgray','lightgrey','gainsboro','whitesmoke',
         'brown','darkred','firebrick','indianred','lightcoral','rosybrown','snow','mistyrose','salmon','tomato','darksalmon','coral','orangered','lightsalmon',
@@ -158,7 +161,7 @@ class Namumark
         'darkmagenta','plum','thistle','violet','orchid','mediumvioletred','deeppink','hotpink','lavenderblush','palevioletred','crimson','pink','lightpink'
     ];
 
-    private static $videoURL = [
+    private const VIDEO_URL = [
         'youtube' => '//www.youtube.com/embed/',
         'kakaotv' => '//tv.kakao.com/embed/player/cliplink/',
         'nicovideo' => '//embed.nicovideo.jp/watch/',
@@ -166,18 +169,20 @@ class Namumark
         'vimeo' => '//player.vimeo.com/video/'
     ];
 
-    private static $syntaxList = [
+    private const SYNTAXSET = [
         'basic','cpp','csharp','css','erlang','go','html','java','javascript','json','kotlin','lisp','lua','markdown',
         'objectivec','perl','php','powershell','python','ruby','rust','sh','sql','swift','typescript','xml'
     ];
 
-    private static $renderpoint = ["\n", '{{{', '}}}', '[', ']', '~~', '--', ',,', '__', '\\', "''", '^^'];
+    private const RENDER_POINT = ["\n", '{{{', '}}}', '[', ']', '~~', '--', ',,', '__', '\\', "''", '^^'];
 
     /**
      * 링크 데이터 (역링크 산출용)
+     * @var $links 문서의 전체 링크
+     * @var $lnkvalidity 링크 유효성 데이터 (캐시)
      */
-    public $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => [], 'category' => []];
-    public static $lnkvalidity = [];
+    public array $links = ['link' => [], 'redirect' => [], 'file' => [], 'include' => [], 'category' => []];
+    private static array $lnkvalidity = [];
 
     private $macro_processors = [], $toc = [], $fn = [], $fn_overview = [], $fnset = [];
     private $fn_names = [], $fn_cnt = 0, $ind_level = 0, $lastfncount = 0, $bqcount = 0;
@@ -191,10 +196,12 @@ class Namumark
     }
 
     /**
-     * Check if page exists
-     * @param mixed $target full title
+     * 주어진 문서가 존재하는지 확인합니다.
+     * @param mixed $target 확인할 문서명
+     * @return bool 존재하면 true, 존재하지 않으면 false를 반환합니다.
      */
-    private function pageExists($target) {
+    private function pageExists(string $target): bool
+    {
         if ($this->db) {
             [$namespace, $title] = Controller::parseTitle($target);
             // 각 링크의 유효성은 1번씩만 조회됨
@@ -209,8 +216,26 @@ class Namumark
             return true;
     }
     
-    function includePage($target) {
-        return '[include 된 문서]';
+    /**
+     * 주어진 문서의 내용을 가져옵니다.
+     * @param mixed $target 가져올 문서명
+     * @return string 가져올 문서의 RAW 내용. 문서가 없다면 빈 값을 반환합니다.
+     */
+    private function includePage(string $target): string
+    {
+        if ($this->db) {
+            [$namespace, $title] = Controller::parseTitle($target);
+            $uuid = Document::getUuid($namespace, $title);
+            // 각 링크의 유효성은 1번씩만 조회됨
+            if ($uuid) {
+                if (!isset(self::$lnkvalidity[$namespace.':'.$title]))
+                self::$lnkvalidity[$namespace.':'.$title] = ($uuid);
+            
+                $doc = Document::load($uuid);
+                return $doc['content'];
+            }
+        }
+        return '';
     }
 
     /**
@@ -223,7 +248,7 @@ class Namumark
         // 문법을 HTML로 변환하는 함수
         $token = $this->htmlScan($wtext);
         if (empty($this->htr)) {
-            $this->htr = new HTMLRenderer();
+            $this->htr = new HtmlRenderer();
         }
         $this->htr->toc = $this->toc;
         $this->htr->fn_overview = $this->fn_overview;
@@ -236,6 +261,10 @@ class Namumark
         return $result;
     }
 
+    /**
+     * 편집창 상단 주석을 렌더링합니다.
+     * @return string HTML 렌더링 결과
+     */
     public function renderComments(): string
     {
         $editorComments = implode("\n", $this->editorCommentsSet);
@@ -312,7 +341,7 @@ class Namumark
                 $innertext = $match[2];
 
                 //+ 접힌문단 기능 추가
-                if (strpos($match[1], '#')) {
+                if (str_contains($match[1], '#')) {
                     $folded = true;
                 } else {
                     $folded = false;
@@ -320,8 +349,6 @@ class Namumark
 
                 $id = $this->tocInsert($this->toc, $innertext, $level);
                 $token = ['type' => 'heading', 'level' => $level, 'section' => $id, 'folded' => $folded ];
-                
-
                 
                 if (preg_match('/\[anchor\((.*)\)\]/', $innertext, $anchor)) {
                     $RealContent = str_replace($anchor[0], '', $innertext);
@@ -344,7 +371,7 @@ class Namumark
                 continue;
             }
 
-            foreach (self::$brackets as $bracket) { //&& $bracket['multiline'] === true
+            foreach (self::BRACKETS as $bracket) { //&& $bracket['multiline'] === true
                 if (str_starts_with(substr($text,$i), $bracket['open']) && $inner = $this->bracketParser($text, $i, $bracket)) {
                     $this->linenotend = true;
                     $result = array_merge($result, $this->lineParser($line), $inner);
@@ -513,7 +540,7 @@ class Namumark
                 //continue;
             }
             
-            if (str_starts_with(substr($text,$i), '{{{') && strpos(substr($text, $i), '}}}') !== false) {
+            if (str_starts_with(substr($text,$i), '{{{') && str_contains(substr($text, $i), '}}}')) {
                 // 삼중괄호 안 ||를 무효화 처리하기 위한 부분
                 $emptytd = false;
                 $brInEscape = false;
@@ -627,9 +654,8 @@ class Namumark
                             }
                             if ($attrxs == 'tablealign' && ($tbattr[2] == 'center' || $tbattr[2] == 'right'))
                                 array_push($tableCls, 'table-'.$tbattr[2]);
-                            elseif (strpos($attrxs, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                            elseif (str_contains($attrxs, 'color') && str_contains($tbattr[2], ',')) {
                                 $colors = explode(',', $tbattr[2]);
-                                //$class = '_'.self::rand(31);
                                 $tableDarkAttr[$tbAttrNm] = $colors[1];
                                 $tableAttr[$tbAttrNm] = $colors[0];
                             } else
@@ -650,9 +676,8 @@ class Namumark
                                 default:
                                     $tbAttrNm = $tbattr[1];
                             }
-                            if (strpos($tbAttrNm, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                            if (str_contains($tbAttrNm, 'color') && str_contains($tbattr[2], ',')) {
                                 $colors = explode(',', $tbattr[2]);
-                                //$class = '_'.self::rand(31);
                                 $token['rows'][$rowIndex]['dark-style'][$tbAttrNm] = $colors[1];
                                 $token['rows'][$rowIndex]['style'][$tbAttrNm] = $colors[0];
                             } else
@@ -673,9 +698,8 @@ class Namumark
                                 default:
                                     $tbAttrNm = $tbattr[1];
                             }
-                            if (strpos($tbAttrNm, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                            if (str_contains($tbAttrNm, 'color') && str_contains($tbattr[2], ',')) {
                                 $colors = explode(',', $tbattr[2]);
-                                //$class = '_'.self::rand(31);
                                 $token['coldarkstyle'][$colIndex][$rowIndex][$tbAttrNm] = $colors[1];
                                 $token['colstyle'][$colIndex][$rowIndex][$tbAttrNm] = $colors[0];
                                 $tdDarkAttr[$tbAttrNm] = $colors[1];
@@ -701,9 +725,8 @@ class Namumark
                                 default:
                                     $tbAttrNm = $tbattr[1];
                             }
-                            if (strpos($tbAttrNm, 'color') !== false && strpos($tbattr[2], ',') !== false) {
+                            if (str_contains($tbAttrNm, 'color') && str_contains($tbattr[2], ',')) {
                                 $colors = explode(',', $tbattr[2]);
-                                //$class = '_'.self::rand(31);
                                 $tdDarkAttr[$tbAttrNm] = $colors[1];
                                 $tdAttr[$tbAttrNm] = $colors[0];
                             } else
@@ -739,7 +762,7 @@ class Namumark
                                 $tdAttr['text-align'] = 'right';
                                 $i += 3;
                         }
-                    } elseif ($attr == 'nopad' || strpos($attr, 'keepall') !== false) {
+                    } elseif ($attr == 'nopad' || str_contains($attr, 'keepall')) {
                         switch ($attr) {
                             case 'nopad':
                                 array_push($tdClass, 'wiki-table-nopadding');
@@ -761,9 +784,8 @@ class Namumark
                         $i += strlen($attr) + 2;
 
                         // <#fff>
-                        if (strpos($attr, ',') !== false) {
+                        if (str_contains($attr, ',')) {
                             $colors = explode(',', $attr);
-                            //$class = '_'.self::rand(31);
                             $tdDarkAttr['background-color'] = $colors[1];
                             $tdAttr['background-color'] = $colors[0];
                         } else
@@ -844,7 +866,7 @@ class Namumark
                 continue;
             }
             
-            if (str_starts_with(substr($text,$i), '{{{') && strpos(substr($text,$i), '}}}') !== false) {
+            if (str_starts_with(substr($text,$i), '{{{') && str_contains(substr($text,$i), '}}}')) {
                 $html .= '{{{';
                 $i += 2;
                 ++$inBracket;
@@ -863,7 +885,7 @@ class Namumark
                     $list = [];
                 }
                 
-                $listdata['listtype'] = self::$list_tags[$match[2]];
+                $listdata['listtype'] = self::LIST_CLASS[$match[2]];
                 if (!isset($listdata['start']))
                     $listdata['start'] = substr($match[3], 1);
                 
@@ -990,7 +1012,7 @@ class Namumark
                 $char = '';
                 continue;
             } else*/
-            if (str_starts_with(substr($text,$i), '{{{') && strpos(substr($text, $i), '}}}') !== false) {
+            if (str_starts_with(substr($text,$i), '{{{') && str_contains(substr($text, $i), '}}}')) {
                 // 삼중괄호 안 닫기를 무효화 처리하기 위한 부분
                 $unloadedstr .= '{{{';
                 $inEscape++;
@@ -1018,7 +1040,7 @@ class Namumark
                 continue;
             } elseif (str_starts_with(substr($text,$i), $bracket['close']) && $cnt === 0) {
                 // 닫는괄호
-                //if ($bracket['strict'] && $bracket['multiline'] && strpos($unloadedstr, "\n")===false)
+                //if ($bracket['strict'] && $bracket['multiline'] && !str_contains($unloadedstr, "\n"))
                 //    return false;
                 
                 $argarray = [$unloadedstr];
@@ -1056,7 +1078,7 @@ class Namumark
                 $inline = '';
                 continue;
             } else {
-                foreach (self::$brackets as $bracket) {
+                foreach (self::BRACKETS as $bracket) {
                     $nj=$j;
                     if (str_starts_with(substr($line,$j), $bracket['open']) && $inner = $this->bracketParser($line, $nj, $bracket)) {
                         array_push($result, ['type' => 'plaintext', 'text' => $inline]);
@@ -1180,7 +1202,7 @@ class Namumark
             
             $text = substr($text, strlen($match[0]));
             return [['type' => 'folding', 'text' => $str, 'html' => $this->blockParser($text, true)]];    
-        } elseif (preg_match('/^#!syntax ('.implode('|', self::$syntaxList).')/', $text, $match)) {
+        } elseif (preg_match('/^#!syntax ('.implode('|', self::SYNTAXSET).')/', $text, $match)) {
             // 구문
             return [['type' => 'syntax', 'lang' => $match[1], 'text' => substr($text, strlen($match[0]))]];
         } elseif (preg_match('/^\+([1-5]) (.*)/', $text, $size)) {
@@ -1190,7 +1212,9 @@ class Namumark
             // {{{-작은글씨}}}
             return [['type' => 'wiki-size', 'size' => 'down-'.$size[1], 'text' => $this->blockParser(substr($text, strlen($size[1]) + 1))]];
         } elseif (preg_match('/^([#0-9A-Za-z,]+) (.*)/', $text, $match) && self::chkColor($match[1], true)) {
-            if (strpos($match[1], ',') !== false) {
+            $dcolor = null;
+            
+            if (str_contains($match[1], ',')) {
                 $colors = explode(',', $match[1]);
                 if (preg_match('/(#[0-9a-f]{3}|#[0-9a-f]{6}|[0-9a-z]+)$/i', $colors[0], $cmatch))
                     $wcolor = $cmatch[1];
@@ -1201,7 +1225,7 @@ class Namumark
                 $wcolor = $cmatch[1];
             return [['type' => 'colortext', 'color' => $wcolor, 'dark-color' => $dcolor, 'text' => $this->blockParser(substr($text, strlen($match[1]) + 1))]];            
         } else {
-            if (strpos($text, "\n") !== false)
+            if (str_contains($text, "\n"))
                 return [['type' => 'rawtext', 'text' => htmlspecialchars($text)]];
             else
                 return [['type' => 'escape', 'text' => htmlspecialchars($text)]];
@@ -1222,7 +1246,7 @@ class Namumark
         $imgAttr = '';
         $imgDarkAttr = '';
         $len = strlen($text);
-        $redirect = strpos($text, '#redirect') === 0;
+        $redirect = str_starts_with($text, '#redirect');
         $forcetext = false;
         $exception = '';
         /*
@@ -1294,7 +1318,7 @@ class Namumark
 
         if ($redirect) {
             $lt_redirect = 'redirect';
-        } elseif (strpos($target, '파일:') === 0 && !$forcetext) {
+        } elseif (str_starts_with($target, '파일:') && !$forcetext) {
             // 파일 삽입
             $imgAlign = 'normal';
             $changed = '';
@@ -1337,7 +1361,7 @@ class Namumark
                         case 'bgcolor':
                             if (!self::chkColor($opt[1]))
                                 continue;
-                            if (strpos($opt[1], ',') !== false) {
+                            if (str_contains($opt[1], ',')) {
                                 $colors = explode(',', $opt[1]);
                                 $imgDarkAttr .= 'background-color:'.$colors[1].'!important;';
                                 $imgAttr .= 'background-color:'.$colors[0].';';
@@ -1369,7 +1393,7 @@ class Namumark
             }
 
             $fileName = substr($target, strlen('파일:'));
-            if (strpos($fileName, '.') !== false) {
+            if (str_contains($fileName, '.')) {
                 $fnexp = explode('.', $fileName);
                 $fnWithoutExt = implode('.', array_slice($fnexp, 0, count($fnexp) - 1));
             } else {
@@ -1380,7 +1404,7 @@ class Namumark
             array_push($this->links['file'], $target);
 
             return [['type' => 'link', 'linktype' => 'file', 'class' => ['wiki-link-internal'], 'href' => $href, 'text' => $target, 'imgalign' => $imgAlign, 'attralign' => $attr_align, 'attrwrapper' => $attr_wrapper, 'wraptag' => $wrapTag, 'fnwithouttext' => $fnWithoutExt]];
-        } elseif (strpos($target, '분류:') === 0 && !$forcetext) {
+        } elseif (str_starts_with($target, '분류:') && !$forcetext) {
             $categoryname = substr($target, strlen('분류:'));
 
             if (!$this->pageExists($target))
@@ -1409,7 +1433,7 @@ class Namumark
             array_push($classList, 'wiki-link-external');
         } else {
             // ../와 /로 시작하는 것은 이스케이프 문자열을 무시함.
-            if (strpos($target, '../') === 0) {
+            if (str_starts_with($target, '../')) {
                 if (strlen($target) > 3)
                     $restpart = substr($target, 2);
                 else
@@ -1419,9 +1443,9 @@ class Namumark
                     $target = implode('/', array_slice($exptar, 0, count($exptar) - 1)).$restpart;
                 else
                     $target = $this->title;
-            } elseif (strpos($target, '/') === 0)
+            } elseif (str_starts_with($target, '/'))
                 $target = $this->title.$target;
-            elseif (strpos($target, ':파일:') === 0 || strpos($target, ':분류:') === 0) {
+            elseif (str_starts_with($target, ':파일:') || str_starts_with($target, ':분류:')) {
                 $target = substr($target, strpos($target, ':분류:') + 1);
                 
                 //$display = $target;
@@ -1485,20 +1509,24 @@ class Namumark
 
                     $include = explode(',', $include);
                     array_push($this->links['include'], $include[0]);
-                    /*if (($page = $this->NWPage->getPage($include[0])) && !empty($page->text)) {
+                    $content = $this->includePage($include[0]);
+                    $content = str_replace("\r\n", "\n", $content);
+                    if (!empty($content)) {
                         foreach ($include as $var) {
                             $var = explode('=', ltrim($var));
                             if (empty($var[1]))
                                 $var[1]='';
-                            $page->text = str_replace('@'.$var[0].'@', $var[1], $page->text);
+                            $content = str_replace('@'.$var[0].'@', $var[1], $content);
                             // 틀 변수
                         }
-                        $child = new NamuMark($page);
+                        $child = new Parser();
+                        $child->noredirect = '1';
+                        $child->title = $include[0];
                         $child->imageAsLink = $this->imageAsLink;
                         $child->included = true;
-                        return $child->toHtml();
-                    }*/
-                    return [['type' => 'wikitext', 'attr' => '', 'text' => '']];
+                        return [['type' => 'plaintext', 'text' => $child->toHtml($content)]];
+                    }
+                    return [['type' => 'plaintext', 'text' => '']];
                 }
                 elseif (preg_match('/^(youtube|nicovideo|kakaotv|vimeo|navertv)\((.*)\)$/i', $text, $include)) {
                     if ($this->inThread)
@@ -1526,7 +1554,7 @@ class Namumark
                     return [['type' => 'video', 
                     'width' => (!empty($var['width'])?$var['width']:'640'), 
                     'height' => (!empty($var['height'])?$var['height']:'360'), 
-                    'src' => self::$videoURL[$include[1]].$components[0].(!empty($urlvararr)?'?'.implode('&', $urlvararr):'')], ];
+                    'src' => self::VIDEO_URL[$include[1]].$components[0].(!empty($urlvararr)?'?'.implode('&', $urlvararr):'')], ];
                     
                 }
                 elseif (preg_match('/^age\((.*)\)$/i', $text, $include)) {
@@ -1726,7 +1754,7 @@ class Namumark
     {
         if ($offset >= strlen($text) || $offset < 0)
             return strlen($text);
-        return ($r=strpos($text, $str, $offset))===false?strlen($text):$r;
+        return ($r = strpos($text, $str, $offset)) === false ? strlen($text) : $r;
     }
 
     private static function jumpStr($string, int &$pointer)
@@ -1735,7 +1763,7 @@ class Namumark
             return false;
         $target_point = ['pos' => null, 'char' => null];
         
-        foreach (static::$renderpoint as $target) {
+        foreach (static::RENDER_POINT as $target) {
             $pos = strpos($string, $target, $pointer);
             if ($target_point['pos'] > $pos || $target_point['pos'] === null)
                 $target_point = ['pos' => $pos, 'char' => $target];
@@ -1750,7 +1778,7 @@ class Namumark
             if ($sharponcsscolors)
                 $cs = substr($c,1);
 
-            if (!preg_match('/^#([0-9a-f]{3}|[0-9a-f]{6})/i', $c) && !in_array(strtolower($cs ?? $c), self::$cssColors))
+            if (!preg_match('/^#([0-9a-f]{3}|[0-9a-f]{6})/i', $c) && !in_array(strtolower($cs ?? $c), self::COLOR_NAMESET))
                 return false;
             $cs = null;
         }

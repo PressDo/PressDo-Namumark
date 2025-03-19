@@ -1,10 +1,10 @@
 <?php
-namespace PressDo\app\Helpers\Mark;
+namespace PressDo\App\Services\Mark\Namumark;
 /**
  * HTML Renderer for Tokenized Namumark
  * @author PRASEOD-
  */
-class HTMLRenderer
+class HtmlRenderer
 {
     public $title, $toc = [], $fn_overview = [], $fn = [], $fnset = [], $darkstyleset = [];
 
@@ -156,20 +156,20 @@ class HTMLRenderer
 
     private function printList($listdata)
     {
-        if(strpos($listdata['listtype'], 'ul') !== false)
+        if (str_contains($listdata['listtype'], 'ul'))
             $tag = 'ul';
-        elseif(strpos($listdata['listtype'], 'list') !== false)
+        elseif (str_contains($listdata['listtype'], 'list'))
             $tag = 'ol';
-        elseif($listdata['listtype'] == 'wiki-indent')
+        elseif ($listdata['listtype'] == 'wiki-indent')
             $tag = 'div';
         
         $html = '<'.$tag.' '.($tag == 'ol' ? 'start="'.$listdata['start'].'" ': ' ').'class="'.$listdata['listtype'].'">';
         
         foreach($listdata['lists'] as $li){
             
-            if($tag == 'div'){
+            if ($tag == 'div') {
                 $html .= $li['html'];
-            }else{
+            } else {
                 $html .= '<li><div>'.$li['html'].'</div></li>';
             }
         }
@@ -184,6 +184,7 @@ class HTMLRenderer
         $tdDarkAttrStr = $tdDarkAttrStr = $trDarkAttrStr = $tableDarkAttrStr = '';
         $tableAttr = $token['style'];
         $tableDarkAttr = $token['dark-style'];
+        $tableClassNm = '';
 
         if(!empty($token['coldarkstyle'])){
             foreach($token['coldarkstyle'] as $cci => $cs){
